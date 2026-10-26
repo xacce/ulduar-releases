@@ -1,73 +1,79 @@
-# Ulduar v0.1.2
+# Ulduar v0.1.3
 
-Ulduar stores binary assets by their BLAKE3 content hash, skips duplicate uploads,
-and resumes interrupted transfers. This update fixes incomplete integrity scans
-and adds a reproducible one-million-object validation test and report.
+This release adds a binary Rust SDK with a durable offline-first asset cache.
+Applications use one hash-addressed API for local and remote data while choosing
+when to upload and how much bandwidth to use.
 
-## Integrity verification fix
+## Binary SDK and offline storage
 
-Previously, `verify` could ignore an error returned while enumerating a directory
-and finish successfully after an incomplete scan. It now fails on that error and
-reports the directory path. A regression test first checks a healthy object,
-then injects an enumeration failure: the old behavior fails the test and the
-corrected behavior passes. Healthy objects, hash checks, storage paths, and the
-HTTP API are unchanged.
+Download `ulduar-v0.1.3-rust-sdk.zip`, extract `ulduar-sdk` into your application's
+`vendor` directory and add `ulduar-sdk = { path = "vendor/ulduar-sdk" }` to Cargo.
+The `.crate` archive is also provided for manual extraction. Cargo builds the
+public Rust facade; the private implementation ships as prebuilt Windows x64
+MSVC and Linux x64 GNU libraries. The selected library embeds into your application
+and extracts into a reusable per-user binary cache. See `SDK.md` for the full guide.
 
-## One million stored objects
+- Writes commit locally before returning a BLAKE3 hash; no automatic upload.
+  Inputs include owned/shared bytes, copied/moved files, readers and encoders.
+- Reads resolve locally first; misses download, resume and verify remote bytes
+  before publication. Offline local reads/writes remain usable.
+- Worker operations support await or polling, progress and cancellation.
+  Local, download and synchronization work have separate queues.
+- Consumer-started synchronization recovers staging, uploads pending objects and
+  cleans expired confirmed objects. Independent upload/download payload limits
+  use bytes per second; zero is unlimited. Memory-only stats provide sizes,
+  pending counts, active leases and synchronization state.
+- Retention is 24 hours after write/hit, with a non-additive one-hour startup grace.
+  Unuploaded data never expires. Leases prevent eviction while paths are in use.
+- SQLite WAL metadata, transactional totals and indexed pages bound inventory work.
+  Interrupted publications and moved files recover on reopening. One process owns
+  each root; clone Store for concurrent threads.
 
-A real Windows/NTFS run created one million distinct 8-byte files in their correct
-hash paths, then exercised the server and CLI:
+## Downloads and server upgrade
 
-- Startup with the populated store: 0.507 seconds.
-- Presence checks for every stored object plus absent IDs: 45.16 seconds, correct.
-- 1,000 verified downloads plus a new HTTP upload/download: passed.
-- Sampled server peak working set: 14.12 MiB.
-- Restart and retrieve existing/new objects: passed.
-- Full `verify`: 1,000,001 objects checked, zero damaged, 428.81 seconds;
-  sampled verifier peak working set 5.72 MiB.
+The release includes Windows x64 server ZIP, static Linux x64 musl server archive,
+Rust SDK ZIP and `.crate`, English guides, example configuration, `BUILD_STATUS.md`
+and `SHA256SUMS`. Verify hashes before installation. Binaries are unsigned; no
+signing key/certificate was used.
 
-These measurements use v0.1.1 production code, before the directory-error fix;
-the fix has its own regression test and functional checks. The fixture was
-seeded directly on disk, not uploaded a million times. Filesystem caches were
-warm. This does not measure bulk upload speed, cold-cache performance, a million
-simultaneous clients, or Linux runtime performance. See `SCALE.md` for the full
-procedure and operational limits.
+The server HTTP API, stored objects and access keys remain compatible. Stop the
+old service, replace its executable and restart, preserving configuration,
+certificates and data. No server migration or service reinstallation is needed
+when paths stay unchanged. The SDK needs a dedicated client cache root and must
+never use the server data root.
 
-## Download and upgrade
-
-- Windows x64: `ulduar-v0.1.2-windows-x86_64.zip`.
-- Linux x64: `ulduar-v0.1.2-linux-x86_64.tar.gz` (static musl).
-- Archives include the executable, README, installation guide, release notes,
-  object-count report, and example config. Verify files against `SHA256SUMS`.
-
-Stop the existing service, replace its executable, and start it again. Preserve
-your config, certificates, keys, and storage. No data migration or service
-reinstallation is required when those paths stay the same.
-
-**TCP 7443 remains the default.** Set `listen` to change it and restart the
-service; update firewall rules and client URLs too. The storage folder is chosen
-with `root_dir` before issuing keys/installing; the legacy `data_dir` alias remains
-supported. Absolute paths work, and relative paths resolve against the config
-folder. Changing the root does not move files; see `INSTALL.md` for migration.
-Windows SCM and Linux systemd autostart commands remain documented there.
+**TCP 7443 remains the default.** Change `listen` to choose another port, restart,
+and update firewall rules and SDK URLs. Set `root_dir` to choose server storage;
+the legacy `data_dir` alias remains supported. See `INSTALL.md` for Windows SCM
+and Linux systemd installation/autostart and storage migration. Choose the client
+root with `StoreOptions::local(path)` in your application.
 
 ## Validation and limits
 
-32 functional release tests, Clippy with warnings denied, native Windows x64 and
-Linux x64 musl cross-builds pass. Windows CLI/curl checks cover omitted `listen`
-(default 7443), explicit 8443, a selected storage root, uploads/downloads, and
-`verify`. Uploaded assets are downloaded and checked against SHA256SUMS before
-publication. Binaries are unsigned.
+44 functional release tests and Clippy with warnings denied cover the existing
+server/transport and new cache/ABI behavior. Cache tests cover TTL/grace, exact
+stats, deduplication, concurrent read/write/cleanup, pins, cancelled copies,
+move recovery preserving a recreated source, corruption and ownership rejection.
+The opt-in 100,000-real-file Windows/NTFS test passed: 49,999 evictions in 13.471 s,
+50,000 pending files plus a pin preserved, 50,001-object restart in 0.014 s.
+See `SCALE.md` for methodology and the earlier server million-object audit.
 
-Linux execution, installing/running SCM or systemd on a target host, and physical
-ENOSPC remain unverified locally. Low-space behavior is tested with the reserve
-setting. Large numbers of partial uploads or damaged objects are separate from
-a healthy completed-object count; see the scale report.
+An independent application compiles against the packaged SDK without private
+crate dependencies and runs from its executable alone. HTTP and HTTPS tests
+exercise all input formats, local-first reads, persistence after process exit
+without destructors, cancelled/resumed uploads/downloads, payload rate limits,
+concurrent local work, refetch, unreachable-server offline use and certificate
+trust/rejection. Release assets are downloaded and checked before publication.
 
-The existing 10 GiB upload target of 80% of a plain disk write is not repeatably
-passing. Last representative results were 1.00 GiB/s upload versus 1.40 GiB/s
-plain write (72%), with 88 MiB sampled server memory. No throughput retuning or
-large-transfer rebenchmark was done in this update.
+Windows x64 server/native client builds and Linux musl server/GNU client
+cross-builds pass. Linux execution, real SCM/systemd installation, physical ENOSPC
+and abrupt power-loss behavior remain unverified locally. Client caches require
+a local filesystem, one owning process and enough space for unexpirable pending
+objects. The client GNU build targets glibc 2.17+; it is not a musl application SDK.
+`read_bytes` buffers/copies the full object; use leases or exports for large assets.
 
-Source remains private in `xacce/ulduar`; the public repository contains binaries
-and documentation. GitHub Actions remain disabled.
+The existing 10 GiB upload target of 80% of plain disk write is not repeatably
+passing (last representative result: 1.00 GiB/s vs 1.40 GiB/s, 72%, server 88 MiB).
+This release does not retune that throughput or repeat the large benchmark.
+Source stays private in `xacce/ulduar`; public releases contain binaries,
+documentation and the thin SDK binding source. GitHub Actions remain disabled.

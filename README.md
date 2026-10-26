@@ -1,6 +1,6 @@
 # Ulduar
 
-A content-addressed asset store and a blocking Rust client. Objects are immutable
+A content-addressed asset server and an offline-first binary Rust SDK. Objects are immutable
 bytes identified by their 64-character, lowercase BLAKE3 hash. The server checks
 every completed upload before publishing it with an atomic rename. Interrupted
 uploads and downloads can be resumed.
@@ -149,35 +149,55 @@ An upload of an existing object is idempotent. The server can answer before
 consuming a rejected or redundant large body, so clients must tolerate a closed
 connection and query the object or upload state before retrying.
 
-## Rust client
+## Rust SDK
 
-Add `ulduar-client` as a path dependency from this workspace:
+Download `ulduar-v0.1.3-rust-sdk.zip` from the public release, extract its
+`ulduar-sdk/` folder into your application's `vendor/`, and add:
 
 ```toml
 [dependencies]
-ulduar-client = { path = "path/to/ulduar/client" }
+ulduar-sdk = { path = "vendor/ulduar-sdk" }
 ```
 
 ```rust,no_run
-use std::path::Path;
-use ulduar_client::Client;
+use ulduar_sdk::{ImportMode, Remote, Store, StoreOptions, SyncOptions};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = Client::new("https://assets.example.com:7443", "uld_your_key")?;
-    let id = client.put_file(Path::new("asset.bin"))?;
-    client.get_to_file(&id, Path::new("download.bin"))?;
+async fn assets() -> Result<(), ulduar_sdk::Error> {
+    let mut options = StoreOptions::local("application-cache/assets");
+    options.remote = Some(Remote::new("https://assets.example.com:7443", "uld_your_key"));
+    let store = Store::open(options).await?;
+    let written = store.import_file("asset.bin", ImportMode::Copy).await?;
+    // Locally committed. No upload until the application asks for synchronization.
+    let lease = store.get(written.hash).await?;
+    println!("Read this path while holding the lease: {}", lease.path().display());
+    lease.release().await?;
+    store.synchronize(SyncOptions { upload_bps: 2 * 1024 * 1024, download_bps: 0 }).await?;
+    store.close().await?;
     Ok(())
 }
 ```
 
-`with_root_certificate` adds a PEM CA or self-signed server certificate to the
-trusted roots. `put_bytes`, `put_from`, `missing`, `has`, `upload_offset`,
-`get_bytes`, and `get_to_writer` are also available. `put_from` takes a known hash,
-length, and a reader factory that can reopen at a requested offset. The client
-skips stored objects, retries transient failures (eight attempts by default), and
-verifies downloads. File downloads use a `.ulduar-part` file and rename it after
-verification. `get_to_writer` streams without retrying and may leave partial
-output on failure. This is a blocking API; call it outside async runtime tasks.
+The SDK contains prebuilt Windows x64 MSVC and Linux x64 GNU client libraries
+and Rust bindings. Cargo builds the small bindings and their public dependencies;
+it does not need access to the private implementation. The matching native
+library is embedded into the application and extracted into a per-user cache on
+first use, so deployment does not need a separate DLL beside the executable.
+
+Writes accept owned/shared bytes, copied/moved files, readers and encoder callbacks.
+Reads by hash use local data first and download verified missing objects. Work runs
+on SDK workers; await operations or poll `try_complete()` in the application's main
+loop. Only the application starts uploads/cleanup with `synchronize`, with separate
+upload/download byte-per-second limits. `stats()` and operation progress are
+memory-only snapshots for UI size and status displays.
+
+The cache keeps objects for 24 hours after a write or hit, grants a one-hour grace
+on startup, protects active leases, and never expires unuploaded writes. One process
+owns a cache directory; share a Store between threads. See
+[SDK.md](https://github.com/xacce/ulduar-releases/blob/main/SDK.md) for the full API,
+retention, recovery, TLS, deployment and integration instructions.
+
+The private workspace's blocking `ulduar-client` transport remains available to
+source builds. The public SDK uses the local store facade described above.
 
 ## Storage and operations
 

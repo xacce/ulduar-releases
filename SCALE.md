@@ -95,3 +95,34 @@ memory and handles independently of the number of stored objects.
 `tmp/` and `quarantine/` use flat directories. A million interrupted uploads or
 damaged files is a separate workload from a million healthy completed objects;
 startup/sweeps scan partial uploads and large damage reports retain their IDs.
+
+## Offline client cache: 100,000 real files (v0.1.3)
+
+The client cache has its own SQLite index and retention rules. An opt-in
+release-mode test on Windows/NTFS seeded 100,000 distinct 8-byte files directly in
+hash paths and inserted metadata in one transaction. Half were confirmed uploaded
+and half pending. Setup took 64.650 seconds; this is not normal import throughput.
+
+With the fake clock advanced eight days and one uploaded object pinned:
+
+- 100,000 memory-only stats snapshots took 0.001 seconds (rounded; no timing gate).
+- Indexed cleanup removed 49,999 expired confirmed objects in 13.471 seconds.
+- All 50,000 pending objects and the pin survived, with exact totals.
+- Reopening the remaining 50,001-object store took 0.014 seconds and recovered
+  exact pending bytes (400,000). Startup uses a global one-hour grace rather than
+  updating every object row.
+- The complete test, including fixture removal, passed in 99.81 seconds.
+
+Reproduce from the private source workspace:
+
+```powershell
+cargo test --release -p ulduar-client-store hundred_thousand -- --ignored --nocapture
+```
+
+This checks indexed retention/aggregates with real files, not 100,000 simultaneous
+leases, writes, processes or interrupted staging records. Metadata pages select
+128 rows; active jobs/leases consume additional memory. Stats do not query SQLite
+or walk directories. Consumer tests separately exercise normal writes, process-exit
+recovery, offline reads/writes, limited/cancelled resumable transfers and TLS.
+The server million-object results above remain the earlier v0.1.1 baseline;
+that full fixture was not repeated for this client feature.

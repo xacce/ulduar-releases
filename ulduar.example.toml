@@ -1,0 +1,16 @@
+# Default: TCP 7443 on all IPv4 interfaces. Change the port here, then restart
+# the service and update the firewall/client URL. Omitting listen also uses 7443.
+listen = "0.0.0.0:7443"
+data_dir = "data"
+tls_cert = "server.crt"
+tls_key = "server.key"
+
+# For a local test or TLS-terminating proxy, remove both TLS paths above and use:
+# plain_http = true
+
+reserve_bytes = 2147483648
+upload_sweep_days = 7
+header_timeout_secs = 30
+body_idle_timeout_secs = 60
+max_connections = 4096
+# log_dir = "logs"

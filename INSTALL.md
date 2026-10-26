@@ -84,8 +84,8 @@ alias for `root_dir`. Specify only one of the two settings.
 Extract the zip into a permanent directory, such as `C:\Ulduar`. In PowerShell:
 
 ```powershell
-Get-FileHash .\ulduar-v0.1.1-windows-x86_64.zip -Algorithm SHA256
-Expand-Archive .\ulduar-v0.1.1-windows-x86_64.zip C:\Ulduar
+Get-FileHash .\ulduar-v0.1.2-windows-x86_64.zip -Algorithm SHA256
+Expand-Archive .\ulduar-v0.1.2-windows-x86_64.zip C:\Ulduar
 Copy-Item C:\Ulduar\ulduar.example.toml C:\Ulduar\ulduar.toml
 # Edit ulduar.toml: choose root_dir, for example 'D:\UlduarData'.
 # Place server.crt and server.key in C:\Ulduar.
@@ -130,7 +130,7 @@ On an x86_64 Linux host with systemd:
 
 ```sh
 sha256sum -c SHA256SUMS --ignore-missing
-tar -xzf ulduar-v0.1.1-linux-x86_64.tar.gz
+tar -xzf ulduar-v0.1.2-linux-x86_64.tar.gz
 sudo install -m 0755 ulduar /usr/local/bin/ulduar
 sudo mkdir -p /etc/ulduar /var/lib/ulduar
 sudo cp ulduar.example.toml /etc/ulduar/ulduar.toml
@@ -217,6 +217,8 @@ cmp asset.bin downloaded.bin
 reads every stored object, computes its BLAKE3 hash, and compares it with its ID.
 Damaged files move to `root_dir/quarantine` and stop being served; the command
 returns a nonzero exit code if corruption is found. Healthy files stay in place.
+An error listing a directory or advancing its entries also makes `verify` fail;
+an incomplete scan must not be reported as a successful integrity check.
 
 ```sh
 ulduar --config /absolute/path/ulduar.toml verify
@@ -229,7 +231,7 @@ daily under `root_dir/logs` unless `log_dir` is set.
 
 ## Change the storage root of an existing server
 
-An upgrade to v0.1.1 does not require a config change. An existing `data_dir`
+An upgrade from v0.1.0 or v0.1.1 does not require a config change. An existing `data_dir`
 continues to select the same folder, or you can rename it to `root_dir` while
 keeping its value. Do not add both settings.
 

@@ -1,88 +1,73 @@
-# Ulduar v0.1.1
+# Ulduar v0.1.2
 
 Ulduar stores binary assets by their BLAKE3 content hash, skips duplicate uploads,
-and resumes interrupted transfers. This update makes the storage location an
-explicit installation setting.
+and resumes interrupted transfers. This update fixes incomplete integrity scans
+and adds a reproducible one-million-object validation test and report.
 
-## Choose the storage root
+## Integrity verification fix
 
-Set `root_dir` in `ulduar.toml` before issuing access keys or running `install`.
-Windows example:
+Previously, `verify` could ignore an error returned while enumerating a directory
+and finish successfully after an incomplete scan. It now fails on that error and
+reports the directory path. A regression test first checks a healthy object,
+then injects an enumeration failure: the old behavior fails the test and the
+corrected behavior passes. Healthy objects, hash checks, storage paths, and the
+HTTP API are unchanged.
 
-```toml
-root_dir = 'D:\UlduarData'
-```
+## One million stored objects
 
-Linux example:
+A real Windows/NTFS run created one million distinct 8-byte files in their correct
+hash paths, then exercised the server and CLI:
 
-```toml
-root_dir = "/srv/ulduar"
-```
+- Startup with the populated store: 0.507 seconds.
+- Presence checks for every stored object plus absent IDs: 45.16 seconds, correct.
+- 1,000 verified downloads plus a new HTTP upload/download: passed.
+- Sampled server peak working set: 14.12 MiB.
+- Restart and retrieve existing/new objects: passed.
+- Full `verify`: 1,000,001 objects checked, zero damaged, 428.81 seconds;
+  sampled verifier peak working set 5.72 MiB.
 
-Objects, partial uploads, `keys.json`, quarantine, and default logs are stored
-under that folder. The executable and config can live elsewhere. Relative roots,
-including the example's `root_dir = "data"`, resolve against the config directory,
-independently of the shell or service working directory. `install` now prints
-the resolved storage root. An explicit `log_dir` keeps its existing meaning.
+These measurements use v0.1.1 production code, before the directory-error fix;
+the fix has its own regression test and functional checks. The fixture was
+seeded directly on disk, not uploaded a million times. Filesystem caches were
+warm. This does not measure bulk upload speed, cold-cache performance, a million
+simultaneous clients, or Linux runtime performance. See `SCALE.md` for the full
+procedure and operational limits.
 
-Existing `data_dir` configs work unchanged. You can rename that setting to
-`root_dir` without changing the path; do not specify both. No data-format or HTTP
-API changes are required. Changing the configured path does not move files:
-stop the service, copy the entire old storage folder including `keys.json`, edit
-the config, grant write access, and restart. See `INSTALL.md` for migration and
-rollback steps. Keep the old copy until the new location is verified.
+## Download and upgrade
 
-## Downloads and setup
+- Windows x64: `ulduar-v0.1.2-windows-x86_64.zip`.
+- Linux x64: `ulduar-v0.1.2-linux-x86_64.tar.gz` (static musl).
+- Archives include the executable, README, installation guide, release notes,
+  object-count report, and example config. Verify files against `SHA256SUMS`.
 
-- Windows x64: `ulduar-v0.1.1-windows-x86_64.zip`.
-- Linux x64: `ulduar-v0.1.1-linux-x86_64.tar.gz` (statically linked musl).
-- Check the archive against `SHA256SUMS`. Archives include the executable,
-  `README.md`, `INSTALL.md`, release notes, and `ulduar.example.toml`.
+Stop the existing service, replace its executable, and start it again. Preserve
+your config, certificates, keys, and storage. No data migration or service
+reinstallation is required when those paths stay the same.
 
-**The default port remains TCP 7443.** Omitting `listen` binds `0.0.0.0:7443`.
-To change it, set e.g. `listen = "0.0.0.0:8443"`, restart the service, and update
-the firewall and client URLs. The example uses HTTPS; supply your own PEM
-certificate and private key.
+**TCP 7443 remains the default.** Set `listen` to change it and restart the
+service; update firewall rules and client URLs too. The storage folder is chosen
+with `root_dir` before issuing keys/installing; the legacy `data_dir` alias remains
+supported. Absolute paths work, and relative paths resolve against the config
+folder. Changing the root does not move files; see `INSTALL.md` for migration.
+Windows SCM and Linux systemd autostart commands remain documented there.
 
-Place the files in permanent locations, select `root_dir`, and issue a key with
-`key add workstation --read --write`. Then enable automatic startup:
+## Validation and limits
 
-```powershell
-# Windows: elevated PowerShell
-C:\Ulduar\ulduar.exe --config C:\Ulduar\ulduar.toml install
-```
+32 functional release tests, Clippy with warnings denied, native Windows x64 and
+Linux x64 musl cross-builds pass. Windows CLI/curl checks cover omitted `listen`
+(default 7443), explicit 8443, a selected storage root, uploads/downloads, and
+`verify`. Uploaded assets are downloaded and checked against SHA256SUMS before
+publication. Binaries are unsigned.
 
-```sh
-# Linux: systemd host
-sudo /usr/local/bin/ulduar --config /etc/ulduar/ulduar.toml install
-```
+Linux execution, installing/running SCM or systemd on a target host, and physical
+ENOSPC remain unverified locally. Low-space behavior is tested with the reserve
+setting. Large numbers of partial uploads or damaged objects are separate from
+a healthy completed-object count; see the scale report.
 
-`install` registers and starts the service and enables startup after reboot.
-For an existing installation, stop the service, replace the executable, and start
-it again. Keep your existing config, certificates, keys, and stored files.
+The existing 10 GiB upload target of 80% of a plain disk write is not repeatably
+passing. Last representative results were 1.00 GiB/s upload versus 1.40 GiB/s
+plain write (72%), with 88 MiB sampled server memory. No throughput retuning or
+large-transfer rebenchmark was done in this update.
 
-## Validation and known limits
-
-All 31 functional release tests and Clippy pass on Windows, alongside native
-Windows x64 and Linux x64 musl cross-builds. New coverage checks absolute roots
-outside the config directory, relative roots, spaces in paths, legacy `data_dir`,
-conflicting settings, and explicit log paths. A real server/CLI test confirms
-selected locations for keys, uploaded objects, temporary storage, logs, and
-quarantine, and verifies access after a process restart from a different working
-directory. Release checks also cover ports 7443 and 8443, archive contents, and
-checksums. Binaries are unsigned; SHA256 checksums are provided.
-
-The following have **not** been verified locally:
-
-- Running the Linux binary on Linux; WSL and Docker are unavailable here.
-- Installing/running the systemd or Windows SCM service on a target host.
-- A physically full disk; low-space behavior is tested through `reserve_bytes`.
-
-The existing performance target of uploading 10 GiB at 80% of a plain disk write
-is **not consistently met** on the development machine. The last representative
-measurements were about 1.00 GiB/s upload versus 1.40 GiB/s plain write (72%),
-0.86 GiB/s verified download, and 88 MiB sampled server memory. Performance was
-not retuned or rebenchmarked for this configuration update.
-
-Source code remains in private `xacce/ulduar`. The public release repository
-contains binaries and documentation. No GitHub Actions are used.
+Source remains private in `xacce/ulduar`; the public repository contains binaries
+and documentation. GitHub Actions remain disabled.

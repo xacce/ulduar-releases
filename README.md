@@ -200,8 +200,27 @@ Logs rotate daily and retain fourteen files. Set `ULDUAR_LOG` to change the log
 filter (default `info`).
 
 `ulduar verify` re-hashes stored objects and moves damaged ones to quarantine.
-It exits unsuccessfully if corruption is found. There is no garbage collector for
+It exits unsuccessfully if corruption is found or a directory cannot be fully
+enumerated. There is no garbage collector for
 completed objects; plan capacity and backups separately.
+
+## Large object counts
+
+Objects are partitioned by the first four hash characters: 256 top-level buckets
+and up to 65,536 leaf directories. At one million distinct objects this averages
+about 15 files per leaf. Requests resolve a known hash directly; they do not scan
+the entire store or load an object index into memory. Startup checks `tmp/`, not
+every completed object.
+
+`POST /missing` accepts at most 10,000 IDs per request. The Rust client's `missing`
+method splits larger slices automatically. Call it with batches if your pipeline
+must also bound its own input/output list memory. `verify` reads every object's
+contents, so its running time depends on object count, total bytes, and storage.
+
+See [SCALE.md](https://github.com/xacce/ulduar-releases/blob/main/SCALE.md) for the
+reproducible million-object check, measured results, and the distinction between
+stored object count and request concurrency. `SHA256SUMS` applies to files attached
+to the corresponding release; repository documentation may be newer.
 
 ## Build and checks
 
@@ -222,3 +241,17 @@ cargo test --release --locked --test big -- --ignored --nocapture
 
 For a smaller diagnostic run, set `ULDUAR_BIG_GIB=2` (`$env:ULDUAR_BIG_GIB = '2'`
 in PowerShell). This does not replace the 10 GiB check.
+
+The separate object-count test creates one million real 8-byte objects and
+checks startup, batched presence queries, sample downloads, a new HTTP upload,
+restart, and full integrity verification. It seeds the fixture directly on disk;
+it does not measure a million uploads. Leave at least 8 GiB free for filesystem
+metadata and run it without other disk-heavy work:
+
+```sh
+cargo test --release --locked --test many -- --ignored --nocapture
+```
+
+`ULDUAR_MANY_OBJECTS` overrides the fixture count for diagnostics. The default
+million-object run requires successful memory samples below 256 MiB for the
+server and verifier. The temporary fixture is removed at the end.

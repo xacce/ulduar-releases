@@ -15,7 +15,7 @@ Copy `ulduar.example.toml` to that location before starting or installing.
 
 ```toml
 listen = "0.0.0.0:7443"
-data_dir = "data"
+root_dir = "data"
 tls_cert = "server.crt"
 tls_key = "server.key"
 ```
@@ -46,19 +46,49 @@ For a TLS-terminating proxy or a local HTTP test, remove `tls_cert` and `tls_key
 and set `plain_http = true`. This serves HTTP on the same configured port. Bearer
 keys travel unencrypted on that connection, so restrict access to it.
 
-The default free-space reserve is 2 GiB. Keep `data_dir/tmp` and
-`data_dir/objects` on one volume and leave room for partial uploads. Unknown
+The default free-space reserve is 2 GiB. Keep `root_dir/tmp` and
+`root_dir/objects` on one volume and leave room for partial uploads. Unknown
 configuration fields are rejected.
+
+## Choose where files are stored
+
+Before creating an access key or running `install`, edit `root_dir` in the config
+to select the storage folder. Windows example (single quotes preserve backslashes):
+
+```toml
+root_dir = 'D:\UlduarData'
+```
+
+Linux example:
+
+```toml
+root_dir = "/srv/ulduar"
+```
+
+Ulduar creates `objects/`, `tmp/`, `quarantine/`, `keys.json`, and `logs/` under
+this folder as needed. It may be on another disk; the executable and configuration
+do not have to live there. The default example, `root_dir = "data"`, selects
+`data/` beside the config. All relative config paths resolve against the config's
+directory, independently of the shell or service working directory. If `log_dir`
+is set explicitly, logs use that path instead; relative `log_dir` remains relative
+to the config directory.
+
+`install` registers the executable and absolute config path, starts the service,
+and prints the resolved storage root. The account creating keys and the service
+account must be able to write there. Choose a persistent local volume available
+at boot. Existing configs using `data_dir` continue to work unchanged; it is an
+alias for `root_dir`. Specify only one of the two settings.
 
 ## Windows: install once for automatic startup
 
 Extract the zip into a permanent directory, such as `C:\Ulduar`. In PowerShell:
 
 ```powershell
-Get-FileHash .\ulduar-v0.1.0-windows-x86_64.zip -Algorithm SHA256
-Expand-Archive .\ulduar-v0.1.0-windows-x86_64.zip C:\Ulduar
+Get-FileHash .\ulduar-v0.1.1-windows-x86_64.zip -Algorithm SHA256
+Expand-Archive .\ulduar-v0.1.1-windows-x86_64.zip C:\Ulduar
 Copy-Item C:\Ulduar\ulduar.example.toml C:\Ulduar\ulduar.toml
-# Edit ulduar.toml and place server.crt and server.key in C:\Ulduar.
+# Edit ulduar.toml: choose root_dir, for example 'D:\UlduarData'.
+# Place server.crt and server.key in C:\Ulduar.
 C:\Ulduar\ulduar.exe --config C:\Ulduar\ulduar.toml key add workstation --read --write
 ```
 
@@ -73,7 +103,7 @@ Get-Service ulduar
 This creates the `ulduar` Windows SCM service with automatic startup, starts it
 immediately, and configures restart after failures. Windows starts it after a
 reboot without a console window or user login. It runs as LocalSystem, which must
-be able to read the config/certificate/key and write the data directory.
+be able to read the config/certificate/key and write the selected `root_dir`.
 
 Allow TCP 7443 in the server's Windows and network/cloud firewall. For example,
 in elevated PowerShell:
@@ -100,13 +130,14 @@ On an x86_64 Linux host with systemd:
 
 ```sh
 sha256sum -c SHA256SUMS --ignore-missing
-tar -xzf ulduar-v0.1.0-linux-x86_64.tar.gz
+tar -xzf ulduar-v0.1.1-linux-x86_64.tar.gz
 sudo install -m 0755 ulduar /usr/local/bin/ulduar
 sudo mkdir -p /etc/ulduar /var/lib/ulduar
 sudo cp ulduar.example.toml /etc/ulduar/ulduar.toml
 ```
 
-Edit `/etc/ulduar/ulduar.toml`: use `data_dir = "/var/lib/ulduar"` and your chosen
+Edit `/etc/ulduar/ulduar.toml`: use `root_dir = "/var/lib/ulduar"` (or another
+storage folder, such as `/srv/ulduar`) and your chosen
 `listen` value (default `0.0.0.0:7443`). Place `server.crt` and `server.key` in
 `/etc/ulduar`, or use absolute certificate paths in the config.
 
@@ -184,7 +215,7 @@ cmp asset.bin downloaded.bin
 
 `verify` is an optional integrity check, not an installation or startup step. It
 reads every stored object, computes its BLAKE3 hash, and compares it with its ID.
-Damaged files move to `data_dir/quarantine` and stop being served; the command
+Damaged files move to `root_dir/quarantine` and stop being served; the command
 returns a nonzero exit code if corruption is found. Healthy files stay in place.
 
 ```sh
@@ -194,7 +225,33 @@ ulduar --config /absolute/path/ulduar.toml key rm workstation
 ```
 
 Revoked keys stop authorizing new requests within about a second. Logs rotate
-daily under `data_dir/logs` unless `log_dir` is set.
+daily under `root_dir/logs` unless `log_dir` is set.
+
+## Change the storage root of an existing server
+
+An upgrade to v0.1.1 does not require a config change. An existing `data_dir`
+continues to select the same folder, or you can rename it to `root_dir` while
+keeping its value. Do not add both settings.
+
+To move storage to another folder:
+
+1. Stop the service (`Stop-Service ulduar` on Windows, or
+   `sudo systemctl stop ulduar` on Linux). Stop any manually launched server too.
+2. Copy the **entire old storage folder**, including `keys.json`, `objects`,
+   `tmp`, and `quarantine`, to the new location. Keep the old copy until the new
+   location is verified. Copy logs too if they use the default location.
+3. Set `root_dir` to the new path in the same config used by the service. If
+   replacing `data_dir`, remove that old setting. Grant the service account write
+   access to the new folder. Explicit TLS and `log_dir` paths are unchanged.
+4. Start the service (`Start-Service ulduar` or `sudo systemctl start ulduar`),
+   check that existing keys can retrieve a known object, and run `verify` against
+   that config if you want a full integrity check.
+
+Changing the setting does not move files automatically. Starting with an empty
+root gives an empty store with no existing access keys. To roll back, stop the
+service and restore the old config path and storage copy; preserve any new writes
+before switching back. Reinstalling the service is unnecessary when its config
+file stays in the same location.
 
 ## Build on the server from private source
 

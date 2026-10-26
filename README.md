@@ -32,6 +32,33 @@ your firewall rule and client URLs. Connect using the server's hostname or IP,
 such as `https://assets.example.com:7443`; `0.0.0.0` is the bind address.
 `plain_http = true` changes the protocol to HTTP on the same configured port.
 
+## Choose the storage root
+
+Set `root_dir` in `ulduar.toml` **before issuing keys or running `install`**.
+This is where Ulduar puts objects, partial uploads, access-key records, quarantine,
+and logs. For example, on Windows:
+
+```toml
+root_dir = 'D:\UlduarData'
+```
+
+On Linux:
+
+```toml
+root_dir = "/srv/ulduar"
+```
+
+The example's `root_dir = "data"` uses a folder beside the configuration file.
+Relative paths are resolved against that file's directory, including when the
+service starts at boot. The executable and config can live elsewhere. `install`
+prints the resolved storage root. The service account needs write access to it.
+An explicit `log_dir` overrides the default `<root_dir>/logs` location.
+
+Existing `data_dir` settings remain supported with the same meaning; use either
+`root_dir` or `data_dir`, never both. Changing the path does not move existing
+files. See [INSTALL.md](INSTALL.md#change-the-storage-root-of-an-existing-server)
+for the stop, copy, and restart procedure.
+
 ## Automatic startup
 
 After placing the executable, configuration, certificate, and key in their final
@@ -59,7 +86,7 @@ need a separate Startup-folder entry, scheduled task, or cron job.
 | `uninstall` | Stop and remove the service registration; keep stored data |
 | `serve` | Run in the current console for manual operation or troubleshooting; stop with Ctrl+C |
 | `key add/list/rm` | Issue, inspect, and revoke access keys |
-| `verify` | Optional integrity check: re-hash objects and move damaged files to `data_dir/quarantine` |
+| `verify` | Optional integrity check: re-hash objects and move damaged files to `root_dir/quarantine` |
 
 The OS runs the server process after `install`; you do not also launch `serve`
 on that port. Linux's generated unit calls `serve` internally; Windows uses an
@@ -154,7 +181,7 @@ output on failure. This is a blocking API; call it outside async runtime tasks.
 
 ## Storage and operations
 
-Paths are relative to `data_dir`:
+Paths are relative to the configured `root_dir`:
 
 ```text
 objects/<first 2 hex>/<next 2 hex>/<id>

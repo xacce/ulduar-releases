@@ -1,7 +1,13 @@
 # Default: TCP 7443 on all IPv4 interfaces. Change the port here, then restart
 # the service and update the firewall/client URL. Omitting listen also uses 7443.
 listen = "0.0.0.0:7443"
-data_dir = "data"
+# Choose the storage root before issuing keys or running install.
+# Relative paths are resolved against this configuration file's directory.
+# Windows: root_dir = 'D:\UlduarData'
+# Linux:   root_dir = "/srv/ulduar"
+# This folder holds objects/, tmp/, quarantine/, keys.json and default logs/.
+# Older configurations may keep data_dir instead; do not set both names.
+root_dir = "data"
 tls_cert = "server.crt"
 tls_key = "server.key"
 

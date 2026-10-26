@@ -151,7 +151,7 @@ connection and query the object or upload state before retrying.
 
 ## Rust SDK
 
-Download `ulduar-v0.1.3-rust-sdk.zip` from the public release, extract its
+Download `ulduar-v0.1.4-rust-sdk.zip` from the public release, extract its
 `ulduar-sdk/` folder into your application's `vendor/`, and add:
 
 ```toml
@@ -191,8 +191,9 @@ upload/download byte-per-second limits. `stats()` and operation progress are
 memory-only snapshots for UI size and status displays.
 
 The cache keeps objects for 24 hours after a write or hit, grants a one-hour grace
-on startup, protects active leases, and never expires unuploaded writes. One process
-owns a cache directory; share a Store between threads. See
+on startup, protects active leases across processes, and never expires unuploaded
+writes. Multiple applications and different EXEs can share one cache directory.
+Only one cleaner runs at a time; others skip cleanup and keep working. See
 [SDK.md](https://github.com/xacce/ulduar-releases/blob/main/SDK.md) for the full API,
 retention, recovery, TLS, deployment and integration instructions.
 

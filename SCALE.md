@@ -126,3 +126,22 @@ or walk directories. Consumer tests separately exercise normal writes, process-e
 recovery, offline reads/writes, limited/cancelled resumable transfers and TLS.
 The server million-object results above remain the earlier v0.1.1 baseline;
 that full fixture was not repeated for this client feature.
+
+## Shared client cache update (v0.1.4)
+
+The same 100,000-file test was repeated with cross-process file leases and a
+single-cleaner try-lock. All retention/count assertions passed: 50,000 pending
+objects and one leased confirmed object survived 49,999 expired evictions.
+Direct fixture setup took 69.957 s, 100,000 memory stats snapshots 0.001 s rounded,
+cleanup 22.860 s, and reopening the remaining 50,001 objects 0.021 s. Total with
+fixture removal was 114.88 s. These measurements replace the v0.1.3 cache timings
+for current code; the earlier numbers above remain labeled as a baseline.
+
+A separate real-process test opens one cache from a host and four differently
+named executables with different binary contents. It verifies concurrent distinct
+writes and shared-content deduplication, a busy cleaner being skipped, imports
+remaining intact while another owner writes them, foreign leases preventing
+eviction, cleanup ownership release after termination, and recovery of a moved
+file from a killed owner. The packaged Rust SDK consumer additionally exercises
+a host and four agent EXEs with distinct SHA256 hashes against a real server.
+No EXE identity or PID determines access to the cache.

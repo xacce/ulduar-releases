@@ -1,4 +1,4 @@
-# Ulduar binary Rust SDK 0.1.3
+# Ulduar binary Rust SDK 0.1.4
 
 Ulduar is an immutable asset store addressed by the 64-character lowercase BLAKE3
 hash of each object's bytes. This SDK adds a durable local store to the remote
@@ -8,8 +8,8 @@ mapping. Identical content shares one object.
 
 ## Install and deploy
 
-Download `ulduar-v0.1.3-rust-sdk.zip` from the
-[public release](https://github.com/xacce/ulduar-releases/releases/tag/v0.1.3),
+Download `ulduar-v0.1.4-rust-sdk.zip` from the
+[public release](https://github.com/xacce/ulduar-releases/releases/tag/v0.1.4),
 verify its SHA256 against the release's `SHA256SUMS`, and extract `ulduar-sdk`
 into your application's `vendor` directory:
 
@@ -18,7 +18,7 @@ into your application's `vendor` directory:
 ulduar-sdk = { path = "vendor/ulduar-sdk" }
 ```
 
-`ulduar-sdk-0.1.3.crate` contains the same bindings and native libraries in Cargo's
+`ulduar-sdk-0.1.4.crate` contains the same bindings and native libraries in Cargo's
 archive format; unpack it and use a path dependency. It is not published on
 crates.io. Do not point Cargo at the private implementation repository.
 
@@ -78,21 +78,40 @@ async fn example() -> Result<(), ulduar_sdk::Error> {
 
 Use an absolute root for a predictable installation location. Relative roots
 resolve against the application's current working directory when opened. This
-root contains `client.sqlite3`, its WAL files, `client.lock`, sharded `objects`
-and staging `tmp`. It must be a dedicated writable local filesystem directory;
+root contains `client.sqlite3`, its WAL files, small maintenance/session lock files,
+sharded `objects` and staging `tmp`. It must be a dedicated writable local filesystem directory;
 never reuse the server's `root_dir`. Network filesystems with unreliable locking,
 SQLite WAL semantics or rename durability are unsupported.
 
-One process owns each root. Opening it again, even from that same process,
-returns `ErrorKind::Busy`. Clone the existing `Store` to share it between threads.
-Separate applications/processes should have separate cache roots. The OS releases
-the ownership lock after a crash. Back up a stopped store as a whole, including
-metadata and pending objects. Do not copy only the SQLite main file while open.
+Multiple processes, different EXE names, different application binary hashes and
+application versions can open the same cache root simultaneously. For example,
+SFX Engine and four background agents can all use one cache. Application identity
+does not choose ownership. Each process opens its own Store; clones are useful
+for threads inside that process. Repeated opens in the same process also work.
+
+Only one process at a time obtains the nonblocking cleanup lock. Another process
+skips cleanup immediately and continues its work. A live AssetLease holds a shared
+lock on its actual immutable file, so a cleaner in any process skips that file.
+Lease locks and maintenance ownership are released if their process exits or dies.
+Recovery distinguishes another process's live imports from abandoned work using
+locked session files, without PID or EXE-name assumptions. Never manually delete
+lock/session files while a cache is open.
+
+All applications sharing a root must use a compatible SDK cache protocol and the
+same remote URL. App versions need not match. v0.1.4 uses cache schema 2; existing
+v0.1.3/schema-1 caches migrate in place, preserving objects, pending state and
+recovery journals. Stop all v0.1.3 SDK users before the first v0.1.4 open and rebuild
+those consumers with the new SDK. A running old exclusive owner returns Busy;
+old SDKs reject the upgraded schema instead of corrupting it. v0.1.3 cannot join
+a v0.1.4 shared cache. Back up the stopped whole cache before upgrading if a rollback
+is needed. Do not downgrade a modified cache by editing its schema version or
+discarding metadata. Restore a complete stopped backup with its matching SDK.
 
 For fully offline use, leave `options.remote = None`. Later close and reopen the
 same root with a remote to upload the pending objects. Reopening with changed
 credentials for the same URL is supported. A cache containing confirmed remote
-objects is bound to that URL: use a new root to change servers. Changing the
+objects is bound to that URL: use a new root to change servers. Changing a URL
+on a pending-only cache requires closing all its users first. Changing the
 contents of a server at the same URL cannot be detected by the client; preserve
 server data and use a new root after replacing that server with an empty store.
 
@@ -108,7 +127,7 @@ All disk access, hashing, SQLite writes, network requests, initialization and
 cleanup run on SDK workers. Local operations have four workers, fetches have two,
 and synchronization has a separate worker. A slow download does not consume the
 local write workers. Fetch misses are serialized within a store so duplicate
-requests share the first completed cached object. Long local operations can still
+requests share the first completed cached object across processes. Long local operations can still
 queue other local operations. Filesystem/system calls and your encoder/reader
 callbacks cannot be forcibly interrupted.
 
@@ -136,7 +155,10 @@ if let Some(result) = operation.try_complete() {
 
 Call `try_complete` until it returns `Some`; after completion it returns `None`.
 `progress()` and `stats()` copy memory-only snapshots, without directory walks,
-SQLite queries or network traffic. A progress snapshot may be temporarily `None`
+SQLite queries or network traffic. Call `refresh_stats().await` or poll its Operation
+to refresh shared totals changed by other processes, then use the updated memory
+snapshot. This indexed query runs on a worker; no directory scan or payload read.
+A progress snapshot may be temporarily `None`
 if the worker is updating it. They are suitable for UI polling, but are not hard
 real-time APIs: ordinary allocation, short registry locks and OS scheduling remain.
 Submitting an operation allocates a small task and can initialize worker threads
@@ -233,6 +255,12 @@ application allows background work. It recovers interrupted staging, cleans expi
 confirmed objects, uploads the FIFO pending set captured at the start of the
 upload phase, then cleans again. New objects after that cutoff wait for the next pass. Synchronization
 is single-file and bounded in metadata pages, not a whole-store in-memory queue.
+Across processes, cleanup uses a separate try-lock: an unsuccessful contender
+skips cleanup and continues. Uploads use their own try-lock to avoid sending the
+same shared pending queue concurrently; a contender returns success with phase
+`upload_busy` and current pending totals. It can retry later. This does not block
+local reads/writes. Downloads of cache misses are serialized across the shared
+root to protect resumable staging; local hits continue on the local workers.
 Failed/cancelled uploads remain pending until a later call confirms server presence
 or successfully completes a resumable upload. One failing object stops that pass;
 inspect the error and call again later. Successful completion with `pending_objects
@@ -279,13 +307,18 @@ No directory watcher or background filesystem scan runs.
 | --- | --- |
 | `objects`, `local_bytes` | Committed local object count and logical payload bytes |
 | `pending_objects`, `pending_bytes` | Subset awaiting remote confirmation |
-| `active_leases` | Native asset pins; cloned public leases share one pin |
+| `active_leases` | Pins held by this Store; cloned public leases share one pin |
 | `synchronizing` | Whether this Store currently has a maintenance pass running |
 
 These totals exclude SQLite, WAL, directory allocation, staging files, partial
 network transfers, source files and exported copies. Use filesystem free-space
 metrics for disk capacity. Aggregates are maintained transactionally in the index
 and published as snapshots; fields sampled during concurrent work are observational.
+Object/byte totals describe the shared root as of this Store's last refresh.
+Use `refresh_stats()` for a worker-side refresh after changes by another process,
+for example periodically while displaying a UI panel. `active_leases` and
+`synchronizing` describe this Store, not a count of every other process's handles.
+The cleaner always checks OS locks from all processes regardless of those UI fields.
 
 `Operation::progress()` reports phase (such as `recovering`, `cleaning`, `offline`,
 `uploading`, `downloading`, `reading`, `writing`, `exporting`, `complete`, `failed`
@@ -335,7 +368,11 @@ aggregates. Startup does not scan all object files; recovery work is proportiona
 to interrupted staging. Active leases and operations use memory proportional to
 their count, not the full object inventory. The functional tests cover TTL/grace,
 deduplication, concurrent reads/writes/cleanup, pins, move recovery, corruption,
-cancellation and ownership. An opt-in Windows/NTFS test seeds 100,000 real 8-byte
+cancellation and schema migration. A real subprocess test runs four distinct EXEs
+against one root, overlapping writes and duplicate publication, protecting foreign
+leases, skipping a busy cleaner, surviving owner termination, recovering moved
+files from a killed owner and preserving another process's active import.
+An opt-in Windows/NTFS test seeds 100,000 real 8-byte
 files, checks exact totals, evicts 49,999 confirmed expired files while preserving
 50,000 pending files and a pin, then reopens the index. See
 [SCALE.md](https://github.com/xacce/ulduar-releases/blob/main/SCALE.md) for measured
@@ -345,11 +382,13 @@ An independent consumer builds against the packaged public SDK, runs with only
 its application executable, exercises offline input formats and restart after
 process exit without destructors, sync cancellation/resume, independent upload
 and download pacing, refetch, offline operation with an unreachable server and
-TLS trust/rejection. Linux native binaries are cross-built, not runtime-validated.
+TLS trust/rejection. It also runs a host and four agent executables with different
+names and SHA256 hashes against the same root and remote. Linux native binaries
+are cross-built, not runtime-validated.
 
 For source maintainers: build the workspace native libraries for the two targets,
 run `python scripts/package-sdk.py`, then `python scripts/test-sdk.py --sdk
- dist/ulduar-v0.1.3-rust-sdk.zip --server
+ dist/ulduar-v0.1.4-rust-sdk.zip --server
  target/x86_64-pc-windows-msvc/release/ulduar.exe` (arguments on one command line).
 Add `--cert target/sdk-test.crt --key target/sdk-test.key` for the local TLS case.
 Native ABI 2 uses C-compatible buffers, opaque handles and matching allocation/free

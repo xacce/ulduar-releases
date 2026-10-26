@@ -1,79 +1,72 @@
-# Ulduar v0.1.3
+# Ulduar v0.1.4
 
-This release adds a binary Rust SDK with a durable offline-first asset cache.
-Applications use one hash-addressed API for local and remote data while choosing
-when to upload and how much bandwidth to use.
+Multiple processes can now use one offline client cache. SFX Engine and its
+background agents, separate EXEs and different application binary hashes can
+open the same root and read/write concurrently. v0.1.3's exclusive cache owner
+restriction has been removed.
 
-## Binary SDK and offline storage
+## Shared cache behavior
 
-Download `ulduar-v0.1.3-rust-sdk.zip`, extract `ulduar-sdk` into your application's
-`vendor` directory and add `ulduar-sdk = { path = "vendor/ulduar-sdk" }` to Cargo.
-The `.crate` archive is also provided for manual extraction. Cargo builds the
-public Rust facade; the private implementation ships as prebuilt Windows x64
-MSVC and Linux x64 GNU libraries. The selected library embeds into your application
-and extracts into a reusable per-user binary cache. See `SDK.md` for the full guide.
+- One process at a time acquires the cleanup try-lock. Other processes skip
+  cleanup immediately and keep reading/writing. No owner service is required.
+- Leases protect the actual immutable file across processes. The cleaner skips
+  every file currently leased by any participating application. Process exit
+  releases its locks automatically.
+- SQLite transactions protect lookup/publication/TTL against deletion. Concurrent
+  publication of identical bytes deduplicates without replacing leased objects.
+- Recovery skips another process's live import. A crashed owner's staged move or
+  completed publication can be recovered without relying on PID or EXE names.
+- Upload and resumable-download ownership are separate from cleanup and local I/O.
+  An upload contender returns current totals with phase upload_busy and can retry.
+- New `refresh_stats()` queries shared indexed totals on a worker. `stats()` stays
+  a memory-only snapshot; active_leases/synchronizing describe that Store instance.
 
-- Writes commit locally before returning a BLAKE3 hash; no automatic upload.
-  Inputs include owned/shared bytes, copied/moved files, readers and encoders.
-- Reads resolve locally first; misses download, resume and verify remote bytes
-  before publication. Offline local reads/writes remain usable.
-- Worker operations support await or polling, progress and cancellation.
-  Local, download and synchronization work have separate queues.
-- Consumer-started synchronization recovers staging, uploads pending objects and
-  cleans expired confirmed objects. Independent upload/download payload limits
-  use bytes per second; zero is unlimited. Memory-only stats provide sizes,
-  pending counts, active leases and synchronization state.
-- Retention is 24 hours after write/hit, with a non-additive one-hour startup grace.
-  Unuploaded data never expires. Leases prevent eviction while paths are in use.
-- SQLite WAL metadata, transactional totals and indexed pages bound inventory work.
-  Interrupted publications and moved files recover on reopening. One process owns
-  each root; clone Store for concurrent threads.
+## Upgrade
 
-## Downloads and server upgrade
+Download `ulduar-v0.1.4-rust-sdk.zip` or `ulduar-sdk-0.1.4.crate`. Use the public
+Rust facade as a path dependency; the private implementation remains prebuilt
+Windows x64 MSVC and Linux x64 GNU/glibc2.17+ libraries. Full English instructions
+and the host/agent usage model are in `SDK.md`.
 
-The release includes Windows x64 server ZIP, static Linux x64 musl server archive,
-Rust SDK ZIP and `.crate`, English guides, example configuration, `BUILD_STATUS.md`
-and `SHA256SUMS`. Verify hashes before installation. Binaries are unsigned; no
-signing key/certificate was used.
+Stop processes using SDK v0.1.3 before the first open with v0.1.4. Cache schema 1
+upgrades transactionally to schema 2, retaining objects, dirty state and recovery
+journals. Update consumers to the new SDK. Old SDKs cannot join the shared cache:
+a live old owner is rejected before migration, and the old SDK rejects schema 2.
+Different application versions can share a root when their SDK cache protocol is
+compatible; their executable name/hash does not matter. Do not downgrade by
+editing the schema version. See the guide for stopped-cache backup/rollback.
 
-The server HTTP API, stored objects and access keys remain compatible. Stop the
-old service, replace its executable and restart, preserving configuration,
-certificates and data. No server migration or service reinstallation is needed
-when paths stay unchanged. The SDK needs a dedicated client cache root and must
-never use the server data root.
+TTL remains 24 hours after write/hit with one-hour startup grace. Unuploaded
+objects never expire. Writes remain local first, misses fetch remote bytes, all
+heavy work stays on workers, and the application starts synchronization. Bandwidth
+limits are per Store, not a global cap across applications. Use the same remote
+URL and a dedicated local filesystem root for every participant.
 
-**TCP 7443 remains the default.** Change `listen` to choose another port, restart,
-and update firewall rules and SDK URLs. Set `root_dir` to choose server storage;
-the legacy `data_dir` alias remains supported. See `INSTALL.md` for Windows SCM
-and Linux systemd installation/autostart and storage migration. Choose the client
-root with `StoreOptions::local(path)` in your application.
+Server API, storage and configuration are unchanged. The server's default remains
+TCP 7443; edit `listen` to change it and `root_dir` to choose its storage folder.
+See `INSTALL.md` for Windows SCM/Linux systemd installation and autostart. Replacing
+the server executable needs a service stop/start with existing config/data kept.
 
-## Validation and limits
+## Verification
 
-44 functional release tests and Clippy with warnings denied cover the existing
-server/transport and new cache/ABI behavior. Cache tests cover TTL/grace, exact
-stats, deduplication, concurrent read/write/cleanup, pins, cancelled copies,
-move recovery preserving a recreated source, corruption and ownership rejection.
-The opt-in 100,000-real-file Windows/NTFS test passed: 49,999 evictions in 13.471 s,
-50,000 pending files plus a pin preserved, 50,001-object restart in 0.014 s.
-See `SCALE.md` for methodology and the earlier server million-object audit.
+47 functional release tests pass, including real subprocesses with four distinct
+EXEs, cross-process lease protection, cleaner contention and process termination,
+active import preservation, schema-1 pending/journal recovery and deduplication.
+Workspace and packaged SDK Clippy pass with warnings denied. The independent
+packaged SDK consumer passes over HTTP and HTTPS, including a host and four agent
+EXEs with different SHA256 hashes, concurrent shared writes/reads/synchronization,
+plus previous offline, resume, cancellation, rate-limit and TLS checks.
 
-An independent application compiles against the packaged SDK without private
-crate dependencies and runs from its executable alone. HTTP and HTTPS tests
-exercise all input formats, local-first reads, persistence after process exit
-without destructors, cancelled/resumed uploads/downloads, payload rate limits,
-concurrent local work, refetch, unreachable-server offline use and certificate
-trust/rejection. Release assets are downloaded and checked before publication.
+The 100,000-real-file Windows/NTFS cache test passed again: 49,999 evictions in
+22.860 s, all 50,000 pending objects plus a pin retained, 50,001-object reopen in
+0.021 s. See `SCALE.md` for exact scope and the earlier server million-object audit.
+Windows server/native builds and Linux musl server/GNU native cross-builds pass.
+All 12 release assets are downloaded and checked against SHA256 before publication.
+Binaries are unsigned.
 
-Windows x64 server/native client builds and Linux musl server/GNU client
-cross-builds pass. Linux execution, real SCM/systemd installation, physical ENOSPC
-and abrupt power-loss behavior remain unverified locally. Client caches require
-a local filesystem, one owning process and enough space for unexpirable pending
-objects. The client GNU build targets glibc 2.17+; it is not a musl application SDK.
-`read_bytes` buffers/copies the full object; use leases or exports for large assets.
-
-The existing 10 GiB upload target of 80% of plain disk write is not repeatably
-passing (last representative result: 1.00 GiB/s vs 1.40 GiB/s, 72%, server 88 MiB).
-This release does not retune that throughput or repeat the large benchmark.
-Source stays private in `xacce/ulduar`; public releases contain binaries,
-documentation and the thin SDK binding source. GitHub Actions remain disabled.
+Linux execution, actual SCM/systemd installation, physical ENOSPC and abrupt
+power loss remain unverified locally. Network filesystems are unsupported. Pending
+objects require disk capacity indefinitely when no server can confirm them.
+The earlier 10 GiB upload target of 80% of plain write is still not repeatably
+passing (representative 1.00 vs 1.40 GiB/s, 72%, server 88 MiB); it was not retuned here.
+Source remains private, thin SDK bindings are public, GitHub Actions stay disabled.

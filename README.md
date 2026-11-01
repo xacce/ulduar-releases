@@ -92,6 +92,37 @@ The OS runs the server process after `install`; you do not also launch `serve`
 on that port. Linux's generated unit calls `serve` internally; Windows uses an
 internal SCM entry point. `verify` is a maintenance command, not a startup step.
 
+## Automatic updates
+
+From v0.1.5, `serve` and the installed service check the latest public release
+each time they start. A newer version is installed over the running executable,
+then the server restarts into it before accepting connections. Nothing else changes:
+config, keys, certificates and stored data stay where they are.
+
+An update is installed only when all of these hold:
+
+- `SHA256SUMS.sig` is a valid Ed25519 signature of the release's `SHA256SUMS`
+  by the Ulduar release key built into the executable;
+- the release version is higher than the running one (no downgrades);
+- the platform archive matches its SHA256 in `SHA256SUMS`;
+- the extracted executable runs and reports exactly that version.
+
+Otherwise, or when GitHub cannot be reached within a few seconds, the server
+logs `update check skipped: <reason>` and starts the current version. The check
+runs only at startup; restart the service to pick up a new release. The account
+running the server needs write access to the executable's folder (the default
+LocalSystem/root service accounts have it). On Windows the replaced file stays as
+`ulduar.exe.<pid>.old` until the next start removes it.
+
+```toml
+auto_update = false   # disable the check
+# update_url = "https://github.com/xacce/ulduar-releases/releases/latest/download"
+```
+
+`update_url` points to any folder serving `SHA256SUMS`, `SHA256SUMS.sig` and the
+archives of a release signed with the same key, for example an internal mirror.
+v0.1.4 and earlier have no updater: install v0.1.5 manually once.
+
 ## HTTP API
 
 Every endpoint requires `Authorization: Bearer <key>`. Keys have independent read

@@ -20,3 +20,7 @@ header_timeout_secs = 30
 body_idle_timeout_secs = 60
 max_connections = 4096
 # log_dir = "logs"
+
+# At every start, install a newer signed release over the executable and restart.
+auto_update = true
+# update_url = "https://github.com/xacce/ulduar-releases/releases/latest/download"

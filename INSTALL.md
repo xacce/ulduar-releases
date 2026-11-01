@@ -226,6 +226,10 @@ ulduar --config /absolute/path/ulduar.toml key list
 ulduar --config /absolute/path/ulduar.toml key rm workstation
 ```
 
+Without `--config`, these commands use `ulduar.toml` beside the executable or,
+when that file does not exist, the config of the installed service. If both
+exist and differ, they stop and ask for `--config` instead of guessing.
+
 Revoked keys stop authorizing new requests within about a second. Logs rotate
 daily under `root_dir/logs` unless `log_dir` is set.
 
@@ -272,6 +276,14 @@ On Windows, the same Cargo command produces `target\release\ulduar.exe`; copy it
 to `C:\Ulduar` before installing. For an upgrade, stop the existing service,
 replace the executable, and start the service again. Keep your config, keys,
 certificates, and stored data; do not rerun first-install config-copy steps.
+
+## Updates
+
+v0.1.5 and later update themselves at startup from signed public releases; see
+[README.md](README.md#automatic-updates). To pick up a new release, restart the
+service (`Restart-Service ulduar` or `sudo systemctl restart ulduar`). Set
+`auto_update = false` in `ulduar.toml` to manage upgrades by hand as described
+above. Servers built from source update too once a newer release is published.
 
 ## Validation limits
 

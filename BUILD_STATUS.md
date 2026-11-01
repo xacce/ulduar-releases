@@ -1,17 +1,17 @@
-# Ulduar v0.1.4 build record, 2026-10-27
+# Ulduar v0.1.5 build record, 2026-11-01
 
-Source commit: `39f69d31d6586be00f5cf374bd82567a501bbe74`.
+Source commit: `3b09e36d494e050d0d340001558c8afa86d31e6b`.
 
-Passed: 47 functional release tests, including shared offline cache/ABI, directory-enumeration failure regression and real-process storage root/restart coverage; workspace and packaged SDK Clippy with warnings denied; independent packaged Rust consumer over HTTP and HTTPS; all offline input forms, process exit without destructors/reopen, cancellation/resume, separate payload rate limits, remote refetch, offline with unreachable server, TLS trust/rejection; host plus four agent EXEs with different names/SHA256 sharing one cache; foreign file leases, nonblocking cleaner contention, process termination, active imports, schema-1 upgrade and pending/journal preservation; Windows x64 MSVC server/native client builds; Linux x64 musl server and glibc 2.17 GNU native client cross-builds; Windows CLI/curl on default TCP 7443 with listen omitted and on explicitly configured TCP 8443.
+Built on Windows x64 with Rust 1.96: Windows x64 MSVC server and static Linux x64 musl server (Zig 0.16 via cargo-zigbuild). Packaged, signed and published from a separate Linux host.
 
-Binaries are unsigned. SHA256SUMS records asset hashes.
+Passed: workspace tests natively on Linux x86_64 (server API, destructive, self-update, cache, ABI) and on Windows x64; workspace Clippy with warnings denied; self-update end to end with the real release key on Windows (released Windows build updating from a local signed mirror, restart, job kill) and Linux (released musl build, exec in place, SIGTERM stop).
 
-Object-count audit: one million real 8-byte objects on Windows/NTFS passed on v0.1.1 production code before the error-path correction. Startup 0.507 s; presence checks 45.16 s; server sampled peak 14.12 MiB; full verify of 1,000,001 objects 428.81 s, zero damaged, sampled peak 5.72 MiB. See SCALE.md for procedure and limits.
+SHA256SUMS records asset hashes and is signed with the Ulduar release key (SHA256SUMS.sig, Ed25519); servers from v0.1.5 verify it before updating themselves. The executables are not Authenticode-signed.
 
-Offline client scale test: 100,000 real 8-byte files directly seeded on Windows/NTFS; 49,999 evictions 22.860 s, 50,000 pending files plus a pin preserved; 50,001-object reopen 0.021 s. This is separate from normal import or network throughput.
+The Rust SDK is unchanged and not part of this release: use the v0.1.4 SDK assets (see SDK.md).
 
-Formatting: the default cargo fmt check reports existing compact-style differences throughout the source tree; no repository-wide reformat was applied.
+Object-count and offline-cache scale audits: unchanged since v0.1.4, see SCALE.md.
 
-Known performance limitation: the 10 GiB upload target (at least 80% of a plain disk write) is not repeatably passing on the development machine. See RELEASE_NOTES.md.
+Known performance limitation: the 10 GiB upload target (at least 80% of a plain disk write) is not repeatably passing. See RELEASE_NOTES.md.
 
-Not checked: running Linux binaries (WSL/Docker unavailable), systemd/SCM installation, physical ENOSPC (reserve_bytes emulation is tested), or abrupt power-loss recovery. Multiple processes share a local cache; one cleaner at a time, contenders skip cleanup. Stop/upgrade all v0.1.3 SDK users before the schema-2 migration; pending data never expires.
+Not checked: self-update through a registered SCM service or systemd unit, physical ENOSPC (reserve_bytes emulation is tested), or abrupt power-loss recovery.

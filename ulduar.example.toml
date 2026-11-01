@@ -5,7 +5,7 @@ listen = "0.0.0.0:7443"
 # Relative paths are resolved against this configuration file's directory.
 # Windows: root_dir = 'D:\UlduarData'
 # Linux:   root_dir = "/srv/ulduar"
-# This folder holds objects/, tmp/, quarantine/, keys.json and default logs/.
+# This folder holds objects/, tmp/, quarantine/, keys.json, v2/ and default logs/.
 # Older configurations may keep data_dir instead; do not set both names.
 root_dir = "data"
 tls_cert = "server.crt"

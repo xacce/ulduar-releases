@@ -1,43 +1,59 @@
-# Ulduar v0.1.5
+# Ulduar v2.0.0
 
-The server now updates itself. `serve` and the installed Windows/Linux service
-check the latest public release at every start, install a newer signed version
-over their executable and restart into it before accepting connections.
+Storage v2: users, projects, rights, chunk-level deduplication across projects,
+asset types and names, and Rust SDK 2 built on them. The v1 storage, its API,
+keys and SDK 0.1.x keep working unchanged next to it.
 
-## Automatic updates
+## Server: storage v2
 
-- Releases carry `SHA256SUMS.sig`, an Ed25519 signature of `SHA256SUMS` made with
-  the Ulduar release key. The public key is built into the server; unsigned or
-  wrongly signed releases are never installed.
-- Only a higher version is installed. The archive must match its SHA256, and the
-  extracted executable must run and report that exact version first. Any failure
-  leaves the current executable untouched.
-- No network or a slow GitHub logs `update check skipped: <reason>` and starts the
-  current version (5 s connect timeout). The check runs only at startup.
-- Linux re-executes the new file in the same process, so systemd keeps tracking it.
-  The Windows service reports a stop and the SCM restart action starts the new
-  file 2 s later. `serve` on Windows runs the new version as a child bound to its
-  console and job: Ctrl+C reaches it, killing the parent stops both.
-- `auto_update = false` disables the check; `update_url` selects a mirror folder
-  holding `SHA256SUMS`, `SHA256SUMS.sig` and the archives.
+- New storage under `root_dir/v2/` with its own API under `/v2`; see README
+  "Storage v2 API". v1 objects stay where they are and are not visible in v2
+  until copied with `ulduar migrate <project> [--type MESH] [ids...]`.
+- Users with permanent tokens (`uld2_...`, many per user, stored as hashes).
+- Projects with per-user read, write and delete rights. Delete is never granted by
+  default. Users with the create-project permission can create projects through
+  the API and get read and write in them.
+- Content-defined chunks (FastCDC, 64 KiB / 256 KiB / 1 MiB) deduplicated across
+  all projects, for storage and for transfer: clients send only chunks the server
+  lacks, and known objects are linked without any payload.
+- A user-defined u32 asset type per entry, not part of the hash. Listing is by
+  nonzero type only, in pages ordered by hash.
+- Optional object names in a separate database: an upload with a name replaces it,
+  without one keeps it; lookup by name and by object. No history, no name deletion.
+- `DELETE` of an object from a project (delete right). Chunks no object uses are
+  removed after `upload_sweep_days`.
+- Console: `user`, `token`, `project`, `grant`, `revoke`, `grants`, `migrate`;
+  `verify` also re-hashes v2 chunks.
+
+## Rust SDK 2.0.0
+
+- Works with storage v2 only. `StoreOptions::project` selects the project;
+  `Remote::new(url, token)` takes a v2 user token.
+- Every write takes a `Meta` (asset type, optional name) and queues one
+  publication; `synchronize` sends them in write order with chunked dedup uploads.
+- New online calls: `me`, `projects`, `create_project`, `list`, `named`, `name`,
+  `delete`; new `ErrorKind::Conflict`. `AssetType::fourcc(b"MESH")` helper.
+- Cache schema 3. Caches made by SDK 0.1.x are refused untouched: give SDK 2 a new
+  cache directory. Native ABI 3.
 
 ## Upgrade
 
-v0.1.4 and earlier have no updater: stop the service, replace the executable with
-v0.1.5 and start it once. Later releases arrive at the next service start.
-Config, keys, certificates and stored data are unchanged. The account running the
-server needs write access to the executable's folder (service defaults have it).
-The Rust SDK and offline cache are unchanged: this release contains no SDK
-assets, keep using `ulduar-v0.1.4-rust-sdk.zip` / `ulduar-sdk-0.1.4.crate`
-from the v0.1.4 release.
+Servers v0.1.5 update themselves at the next start; older ones need the new
+executable installed once. Config, v1 keys and v1 data are kept; `v2/` is created
+empty. Then create users, projects, grants and tokens (INSTALL.md "Storage v2").
+Applications move to SDK 2 by adding a project, `Meta` arguments and a token, and
+by pointing the store at a new cache directory.
 
 ## Verification
 
-Workspace tests pass on Windows, including local signed releases with foreign keys,
-missing signatures, wrong hashes, mismatched or non-runnable executables (each
-leaving the executable unchanged), downgrade/same-version refusal and startup with
-an unreachable release server. End to end with the real release key: a v0.1.5
-`serve` installed v0.1.6 from a local mirror and served it, on Windows (child and
-job kill checked) and on Linux (static musl binary, same PID after exec, SIGTERM
-stop). Clippy passes with warnings denied. Actual SCM-driven restart after an
-update was not exercised on a registered service.
+On Windows: server tests (library, v1 API, destructive, update, and v2 end to end:
+console-managed users and tokens, rights including default-off delete, chunked
+uploads deduplicated across projects, types, names, listing, deletion, chunk
+collection and v1 migration), client cache tests (publication queues, refusal of
+SDK 0.1 caches, recovery) and native ABI tests pass; Clippy passes with warnings
+denied. An independent consumer built from the packaged SDK passed offline, crash
+recovery, rate-limited and cancelled sync, download, four processes sharing one
+cache, the v2 calls (projects, Conflict, listing, names, deletion, project
+isolation) and offline use against a stopped server. The static Linux musl server
+was smoke-run on Linux (users, tokens, v2 projects); the Linux GNU client library
+(glibc 2.17) is cross-built and inspected, not run.

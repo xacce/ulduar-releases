@@ -1,15 +1,21 @@
-# Ulduar binary Rust SDK 0.1.4
+# Ulduar binary Rust SDK 2.0.0
 
 Ulduar is an immutable asset store addressed by the 64-character lowercase BLAKE3
 hash of each object's bytes. This SDK adds a durable local store to the remote
 server: writes commit locally, reads resolve locally first, and your application
-chooses when to upload and clean the cache. Keep your own filenames and asset-to-hash
-mapping. Identical content shares one object.
+chooses when to upload and clean the cache. Identical content shares one object.
+
+SDK 2 talks only to the server's storage v2 (Ulduar 2.0.0 or newer): objects live
+in **projects**, every write may carry a user-defined **asset type** and a
+**name**, and uploads send only the 64 KiB-1 MiB chunks the server does not
+already have from any project. See "Projects, types and names" below. SDK 0.1.x
+keeps working against the unchanged v1 API; the two use different cache
+directories and different credentials (v1 keys, v2 user tokens).
 
 ## Install and deploy
 
-Download `ulduar-v0.1.4-rust-sdk.zip` from the
-[public release](https://github.com/xacce/ulduar-releases/releases/tag/v0.1.4),
+Download `ulduar-v2.0.0-rust-sdk.zip` from the
+[public release](https://github.com/xacce/ulduar-releases/releases/tag/v2.0.0),
 verify its SHA256 against the release's `SHA256SUMS`, and extract `ulduar-sdk`
 into your application's `vendor` directory:
 
@@ -18,7 +24,7 @@ into your application's `vendor` directory:
 ulduar-sdk = { path = "vendor/ulduar-sdk" }
 ```
 
-`ulduar-sdk-0.1.4.crate` contains the same bindings and native libraries in Cargo's
+`ulduar-sdk-2.0.0.crate` contains the same bindings and native libraries in Cargo's
 archive format; unpack it and use a path dependency. It is not published on
 crates.io. Do not point Cargo at the private implementation repository.
 
@@ -53,16 +59,18 @@ hashes verify downloaded bytes, not a code-signing certificate.
 ## Open a store
 
 ```rust,no_run
-use ulduar_sdk::{Remote, Store, StoreOptions, SyncOptions};
+use ulduar_sdk::{AssetType, Meta, Remote, Store, StoreOptions, SyncOptions};
+
+const TEXTURE: AssetType = AssetType::fourcc(b"TEXR");
 
 async fn example() -> Result<(), ulduar_sdk::Error> {
-    let mut options = StoreOptions::local("D:/MyApplication/assets");
-    options.remote = Some(Remote::new(
+    let remote = Remote::new(
         "https://assets.example.com:7443",
-        std::env::var("ULDUAR_KEY").expect("set ULDUAR_KEY"),
-    ));
+        std::env::var("ULDUAR_TOKEN").expect("set ULDUAR_TOKEN"),
+    );
+    let options = StoreOptions::remote("D:/MyApplication/assets", "game", remote);
     let store = Store::open(options).await?;
-    let written = store.write_bytes(b"asset bytes".to_vec()).await?;
+    let written = store.write_bytes(b"asset bytes".to_vec(), Meta::typed(TEXTURE).named("hero/diffuse")).await?;
     // No upload has been attempted. Persist written.hash in your application.
     let bytes = store.read_bytes(written.hash.clone()).await?;
     assert_eq!(bytes, b"asset bytes");
@@ -98,16 +106,16 @@ locked session files, without PID or EXE-name assumptions. Never manually delete
 lock/session files while a cache is open.
 
 All applications sharing a root must use a compatible SDK cache protocol and the
-same remote URL. App versions need not match. v0.1.4 uses cache schema 2; existing
-v0.1.3/schema-1 caches migrate in place, preserving objects, pending state and
-recovery journals. Stop all v0.1.3 SDK users before the first v0.1.4 open and rebuild
-those consumers with the new SDK. A running old exclusive owner returns Busy;
-old SDKs reject the upgraded schema instead of corrupting it. v0.1.3 cannot join
-a v0.1.4 shared cache. Back up the stopped whole cache before upgrading if a rollback
-is needed. Do not downgrade a modified cache by editing its schema version or
-discarding metadata. Restore a complete stopped backup with its matching SDK.
+same remote URL. App versions need not match. SDK 2 uses cache schema 3 and
+refuses caches made by SDK 0.1.x (schema 1-2) without touching them, with
+`InvalidArgument` "this cache was made by SDK 0.1 for storage v1". Give SDK 2 a
+new, empty cache directory; SDK 0.1.x keeps using the old one against v1. Old
+SDKs likewise reject a schema-3 cache. Stores with different projects may share
+one root: their objects and leases are shared, each synchronizes only its own
+project's queued writes.
 
-For fully offline use, leave `options.remote = None`. Later close and reopen the
+For fully offline use, leave `options.remote = None` but still set
+`options.project`: writes are queued for that project. Later close and reopen the
 same root with a remote to upload the pending objects. Reopening with changed
 credentials for the same URL is supported. A cache containing confirmed remote
 objects is bound to that URL: use a new root to change servers. Changing a URL
@@ -118,7 +126,7 @@ server data and use a new root after replacing that server with an empty store.
 The server's default is **TCP 7443**. `listen = "0.0.0.0:8443"` in `ulduar.toml`
 changes it; restart the server, adjust firewall rules and use `:8443` in the SDK
 URL. See [INSTALL.md](https://github.com/xacce/ulduar-releases/blob/main/INSTALL.md)
-for server setup, `root_dir`, access keys and Windows SCM/Linux systemd autostart.
+for server setup, `root_dir`, users, tokens, projects and Windows SCM/Linux systemd autostart.
 The SDK itself is a library inside your process, with no client service to install.
 
 ## Threading, awaiting and polling
@@ -179,27 +187,30 @@ never returned as successful writes/downloads.
 
 | Method | Input and ownership |
 | --- | --- |
-| `write_bytes(Vec<u8>)` | Moves an owned buffer into a worker; no main-thread payload copy |
-| `write_shared(Arc<[u8]>)` | Shares immutable bytes without copying them on submission |
-| `import_file(path, ImportMode::Copy)` | Copies/hash-checks a file on a worker; leaves source |
-| `import_file(path, ImportMode::Move)` | Renames into staging on the same volume, then hashes; copies across volumes |
-| `write_from(reader)` | Takes a `Read + Send + 'static` reader and streams it on a worker |
-| `write_with(closure)` | Runs an encoder/serializer against a buffered `Write` sink on a worker |
+| `write_bytes(Vec<u8>, meta)` | Moves an owned buffer into a worker; no main-thread payload copy |
+| `write_shared(Arc<[u8]>, meta)` | Shares immutable bytes without copying them on submission |
+| `import_file(path, ImportMode::Copy, meta)` | Copies/hash-checks a file on a worker; leaves source |
+| `import_file(path, ImportMode::Move, meta)` | Renames into staging on the same volume, then hashes; copies across volumes |
+| `write_from(reader, meta)` | Takes a `Read + Send + 'static` reader and streams it on a worker |
+| `write_with(meta, closure)` | Runs an encoder/serializer against a buffered `Write` sink on a worker |
 
+`meta` is a `Meta { asset_type, name }`; `Meta::default()` is untyped and unnamed.
+Writes need `StoreOptions::project`, otherwise they fail with `InvalidArgument`.
 Writes return `Written { hash, size, source_removed }` after complete bytes and
 metadata have been committed. Persist the returned hash, then read through SDK
-APIs. An existing object deduplicates; writing it refreshes its TTL. A failed
+APIs. An existing object deduplicates locally; writing it refreshes its TTL and
+still queues one publication with this write's type and name. A failed
 encoder or cancelled incomplete copy is not published. Files are immutable once
 published. File paths passed through the ABI must be valid UTF-8.
 
 ```rust,no_run
-# use ulduar_sdk::{Store, ImportMode};
+# use ulduar_sdk::{Store, ImportMode, Meta};
 # async fn inputs(store: &Store) -> Result<(), ulduar_sdk::Error> {
-let copied = store.import_file("input.exr", ImportMode::Copy).await?;
-let moved = store.import_file("temporary.exr", ImportMode::Move).await?;
+let copied = store.import_file("input.exr", ImportMode::Copy, Meta::default()).await?;
+let moved = store.import_file("temporary.exr", ImportMode::Move, Meta::default()).await?;
 println!("{}; source removed: {}", moved.hash, moved.source_removed);
-let streamed = store.write_from(std::io::Cursor::new(vec![1, 2, 3])).await?;
-let encoded = store.write_with(|output| {
+let streamed = store.write_from(std::io::Cursor::new(vec![1, 2, 3]), Meta::default()).await?;
+let encoded = store.write_with(Meta::default(), |output| {
     output.write_all(b"header")?;
     output.write_all(&[1, 2, 3])
 }).await?;
@@ -216,12 +227,67 @@ retains the staged data for recovery. A crash may leave a recovered object whose
 hash the caller did not receive; use Copy if the original path must survive all
 failures. The cache is not a filename database.
 
+## Projects, types and names
+
+A server project is a named set of objects with per-user rights: read, write and
+delete. A Store reads from and publishes to `StoreOptions::project`. Bytes are
+deduplicated globally on the server, so an upload whose chunks already exist in
+any project sends almost nothing; each project still sees only what was
+published into it.
+
+- **Type**: `AssetType(u32)`, user-defined, `AssetType::fourcc(b"MESH")` for
+  four-character codes. `AssetType::NONE` (0) is untyped. The type is not part of
+  the hash: the same bytes may be published under several types. Publishing
+  typed bytes removes their untyped entry.
+- **Name**: an optional UTF-8 string of 1-4096 bytes, one current name per object
+  and project. A write with a name replaces the object's name on the next
+  synchronization; a write without one keeps the name it has. Names have no
+  history and no delete call; deleting the object drops its name.
+- **Publication**: every write queues one publication (project, type, name).
+  `synchronize` sends them in write order, so the last write of the same bytes
+  decides the name.
+
+Online calls run on the fetch workers, need a remote (`Offline` without one), and
+see only what has been synchronized:
+
+| Method | Result |
+| --- | --- |
+| `me()` | `Me { user, token, create_project }` for the token |
+| `projects()` | `Vec<Project { name, read, write, delete }>` the token has any right in |
+| `create_project(name)` | Needs the user's create-project permission; the creator gets read and write, never delete. `Conflict` if taken |
+| `list(asset_type, after, limit)` | `Page { objects, next }` of hashes with this nonzero type, ascending; `limit` 1-10000 |
+| `named(name, after, limit)` | `Page` of hashes currently carrying this name |
+| `name(hash)` | `Option<String>`: the object's current name, `None` if it has none or the project lacks it |
+| `delete(hash)` | Needs delete. Removes the object (all its types) from the project and drops its queued publications there; `false` if the project did not hold it. Local bytes stay until evicted |
+
+Paginate by passing the previous page's `next` as `after` until it is `None`.
+There is no listing of untyped objects and no listing of everything; keep your
+own index of untyped hashes.
+
+```rust,no_run
+# use ulduar_sdk::{AssetType, Store};
+# async fn meshes(store: &Store) -> Result<(), ulduar_sdk::Error> {
+let mut after = None;
+loop {
+    let page = store.list(AssetType::fourcc(b"MESH"), after, 1000).await?;
+    for hash in &page.objects {
+        println!("{hash}: {:?}", store.name(hash.clone()).await?);
+    }
+    match page.next {
+        Some(next) => after = Some(next),
+        None => break,
+    }
+}
+# Ok(()) }
+```
+
 ## Read APIs and leases
 
 `get(hash)` first looks in the local index. If found, it returns an `AssetLease`.
-If absent, it downloads from the remote, resumes a partial transfer if possible,
+If absent, it downloads from the store's project, resumes a partial transfer if possible,
 checks BLAKE3, commits it into the cache, then returns a lease. A missing remote
-object returns `NotFound`. Without a remote, a local miss returns `Offline`;
+object, or a project the token cannot see, returns `NotFound`. Local hits do not
+check projects: a root shared by stores of several projects shares its bytes. Without a remote, a local miss returns `Offline`;
 with an unreachable remote it returns `Network`. Neither prevents other local
 reads and writes.
 
@@ -253,7 +319,7 @@ while SDK operations/callbacks are active.
 No upload or timer starts automatically. Call `synchronize(SyncOptions)` when your
 application allows background work. It recovers interrupted staging, cleans expired
 confirmed objects, uploads the FIFO pending set captured at the start of the
-upload phase, then cleans again. New objects after that cutoff wait for the next pass. Synchronization
+upload phase for this store's project, then cleans again. New objects after that cutoff wait for the next pass. Synchronization
 is single-file and bounded in metadata pages, not a whole-store in-memory queue.
 Across processes, cleanup uses a separate try-lock: an unsuccessful contender
 skips cleanup and continues. Uploads use their own try-lock to avoid sending the
@@ -261,11 +327,14 @@ same shared pending queue concurrently; a contender returns success with phase
 `upload_busy` and current pending totals. It can retry later. This does not block
 local reads/writes. Downloads of cache misses are serialized across the shared
 root to protect resumable staging; local hits continue on the local workers.
-Failed/cancelled uploads remain pending until a later call confirms server presence
-or successfully completes a resumable upload. One failing object stops that pass;
+Each publication first asks the server to link known content (no payload); otherwise
+the file is cut into content-defined chunks, the server reports which it lacks, and
+only those are sent before the manifest commit. Failed/cancelled uploads remain
+pending; already sent chunks are not sent again. One failing object stops that pass;
 inspect the error and call again later. Successful completion with `pending_objects
 == 0` means all currently recorded local writes are confirmed at the configured
-server. Writes committed concurrently may produce a nonzero pending count.
+server. `pending_objects` counts objects of the whole root that still have a queued
+publication in any project; a store of one project cannot clear another's. Writes committed concurrently may produce a nonzero pending count.
 
 `upload_bps` and `download_bps` are independent shared payload limits, in **bytes
 per second**, per Store. Zero is unlimited. The selected values persist for that
@@ -346,8 +415,10 @@ Disk/controller guarantees still apply; abrupt power loss on the actual target
 storage and physical disk-full behavior have not been validated locally.
 
 Handle `Error { kind, message, http_status }`. Useful kinds are `Cancelled`,
-`Offline`, `Busy`, `NotFound`, `Unauthorized`, `Forbidden`, `HashMismatch`,
+`Offline`, `Busy`, `Conflict`, `NotFound`, `Unauthorized`, `Forbidden`, `HashMismatch`,
 `ServerFull`, `Io`, `Network`, `InvalidArgument`, `Http`, `Native` and `Load`.
+`Forbidden` means the token lacks the right in this project; `Conflict` is a taken
+project name or an upload the server kept refusing.
 `HashMismatch` also covers detected local corruption. Errors preserve underlying
 TLS causes. Configure `Remote::attempts` above zero (default 3); retries apply to
 transient network/server failures, not authentication errors or absent objects.
@@ -357,8 +428,8 @@ back an upload already accepted by the server.
 For a private CA or self-signed **server** certificate, set
 `remote.root_certificate = Some(pem_bytes)` before opening. Normal certificate
 chain/hostname/expiry checks remain enabled; the URL hostname must match its SAN.
-Keep access keys in your application's secret configuration, never in source or
-logs. Keys need read and write access for a bidirectional cache. There is no
+Keep tokens in your application's secret configuration, never in source or
+logs. A bidirectional cache needs read and write in its project. There is no
 certificate-validation bypass and no client signing key generated by the SDK.
 
 ## Scale and verification
@@ -368,7 +439,7 @@ aggregates. Startup does not scan all object files; recovery work is proportiona
 to interrupted staging. Active leases and operations use memory proportional to
 their count, not the full object inventory. The functional tests cover TTL/grace,
 deduplication, concurrent reads/writes/cleanup, pins, move recovery, corruption,
-cancellation and schema migration. A real subprocess test runs four distinct EXEs
+cancellation, publication queues per project and refusal of SDK 0.1 caches. A real subprocess test runs four distinct EXEs
 against one root, overlapping writes and duplicate publication, protecting foreign
 leases, skipping a busy cleaner, surviving owner termination, recovering moved
 files from a killed owner and preserving another process's active import.
@@ -380,18 +451,17 @@ results and the separate server million-object test.
 
 An independent consumer builds against the packaged public SDK, runs with only
 its application executable, exercises offline input formats and restart after
-process exit without destructors, sync cancellation/resume, independent upload
+process exit without destructors, projects, rights, types, names, listing and deletion, sync cancellation/resume, independent upload
 and download pacing, refetch, offline operation with an unreachable server and
 TLS trust/rejection. It also runs a host and four agent executables with different
 names and SHA256 hashes against the same root and remote. Linux native binaries
 are cross-built, not runtime-validated.
 
-For source maintainers: build the workspace native libraries for the two targets,
-run `python scripts/package-sdk.py`, then `python scripts/test-sdk.py --sdk
- dist/ulduar-v0.1.4-rust-sdk.zip --server
- target/x86_64-pc-windows-msvc/release/ulduar.exe` (arguments on one command line).
-Add `--cert target/sdk-test.crt --key target/sdk-test.key` for the local TLS case.
-Native ABI 2 uses C-compatible buffers, opaque handles and matching allocation/free
+For source maintainers: build the workspace native libraries for the two targets
+on the build machine, then run `python3 scripts/package-sdk.py` and
+`python3 scripts/test-sdk.py` on the host that drives it through `nx`.
+Native ABI 3 uses C-compatible buffers, opaque handles and matching allocation/free
 functions; consumers should use the safe Rust facade rather than calling symbols
 without the lifetime/threading contracts. A future incompatible ABI requires a new
-binding/library pair. Existing server data/config need no migration for this SDK.
+binding/library pair. Server v1 data is not visible to SDK 2; copy it into a
+project with the server's `migrate` command.

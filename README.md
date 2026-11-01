@@ -6,7 +6,9 @@ every completed upload before publishing it with an atomic rename. Interrupted
 uploads and downloads can be resumed.
 
 Use Ulduar to share build assets, VFX caches, or other large binary files between
-machines. Identical content has one ID, so clients can skip files already stored
+machines. Since 2.0.0 a second storage, v2, adds users with permanent tokens,
+projects with read/write/delete rights, chunk-level deduplication across projects,
+asset types and names; see [Storage v2 API](#storage-v2-api). Identical content has one ID, so clients can skip files already stored
 and resume interrupted transfers. It stores the bytes; your pipeline keeps the
 filenames and the mapping from assets to their IDs.
 
@@ -85,7 +87,8 @@ need a separate Startup-folder entry, scheduled task, or cron job.
 | `install` | Register the OS service, enable boot startup, and start it now |
 | `uninstall` | Stop and remove the service registration; keep stored data |
 | `serve` | Run in the current console for manual operation or troubleshooting; stop with Ctrl+C |
-| `key add/list/rm` | Issue, inspect, and revoke access keys |
+| `key add/list/rm` | Issue, inspect, and revoke v1 access keys |
+| `user`, `token`, `project`, `grant`, `revoke`, `grants`, `migrate` | Manage storage v2; see [Console](#console) |
 | `verify` | Optional integrity check: re-hash objects and move damaged files to `root_dir/quarantine` |
 
 The OS runs the server process after `install`; you do not also launch `serve`
@@ -123,7 +126,7 @@ auto_update = false   # disable the check
 archives of a release signed with the same key, for example an internal mirror.
 v0.1.4 and earlier have no updater: install v0.1.5 manually once.
 
-## HTTP API
+## HTTP API (v1)
 
 Every endpoint requires `Authorization: Bearer <key>`. Keys have independent read
 and write permissions. There is no endpoint to list, search, or delete objects.
@@ -180,9 +183,88 @@ An upload of an existing object is idempotent. The server can answer before
 consuming a rejected or redundant large body, so clients must tolerate a closed
 connection and query the object or upload state before retrying.
 
+## Storage v2 API
+
+Ulduar 2.0.0 adds a second, independent storage under `root_dir/v2/` with its own
+API under `/v2`. The v1 API above, its keys and its data are unchanged; v2 does
+not see v1 objects until they are copied with `migrate`. The Rust SDK 2 uses only v2.
+
+- **Users and tokens.** Every v2 request needs `Authorization: Bearer uld2_...`,
+  a permanent token of a user. A user may hold many tokens; the server stores only
+  their hashes. v1 keys are not accepted on `/v2`.
+- **Projects and rights.** Objects belong to projects, addressed by name (1-64 of
+  `A-Z a-z 0-9 - _ .`). A user has read, write and delete rights per project; delete
+  is never given by default. A user with the create-project permission may create
+  projects through the API and receives read and write in them.
+- **Chunks and dedup.** Clients cut content into content-defined chunks (FastCDC,
+  64 KiB min, 256 KiB average, 1 MiB max) and upload only those the server lacks.
+  Chunks and objects are shared by all projects: content known anywhere on the
+  server is linked into another project without being sent again. Anyone who can
+  write a project and knows an object's hash can link that object into it.
+- **Types.** An entry is (project, type, hash). The type is a user-defined u32
+  (FourCC by convention, `MESH` = little-endian bytes), not part of the hash; 0 is
+  untyped. Publishing typed bytes removes their untyped entry.
+- **Names.** Optional, one current name per (project, object), 1-4096 bytes, kept
+  in a separate `v2/names.db`. An upload with a name replaces it, an upload without
+  one keeps it. No history and no name deletion; deleting an object drops its name.
+
+| Request | Right | Result |
+| --- | --- | --- |
+| `GET /v2/me` | any token | `{"user","token","create_project"}` |
+| `GET /v2/projects` | any token | `[{"name","read","write","delete"}]` with any right |
+| `POST /v2/projects` `{"name"}` | create-project | `201`; `409` if the name is taken |
+| `POST /v2/projects/<p>/chunks/missing` | write | JSON array of the supplied chunk hashes the server lacks |
+| `PUT /v2/projects/<p>/chunks/<h>` | write | Chunk bytes, at most 4 MiB; `201` new, `200` known, `422` hash mismatch |
+| `GET /v2/projects/<p>/chunks/<h>` | read | Chunk bytes |
+| `PUT /v2/projects/<p>/objects/<h>` | write | `{"type","name"?,"chunks"?}`: link or commit, see below |
+| `GET`/`HEAD /v2/projects/<p>/objects/<h>` | read | Object bytes with single-range support, as v1 |
+| `GET /v2/projects/<p>/objects/<h>/manifest` | read | The object's ordered `[chunk hash, length]` list |
+| `DELETE /v2/projects/<p>/objects/<h>` | delete | `204`; removes every type of the object and its name from the project |
+| `POST /v2/projects/<p>/objects/missing` | read or write | Supplied object hashes this project lacks |
+| `GET /v2/projects/<p>/objects?type=&after=&limit=` | read | `{"objects":[...],"next"}`; type must be nonzero |
+| `GET /v2/projects/<p>/names?name=&after=&limit=` | read | Page of objects carrying the name |
+| `GET /v2/projects/<p>/names/<h>` | read | `{"name"}`; `404` without one |
+
+`PUT .../objects/<h>` without `chunks` links content the server already has:
+`201` if the project gains the entry, `200` if it already had it, `409
+{"unknown":true}` if the server does not know the object. With `"chunks":
+[[hash, length], ...]` it commits the object after re-hashing the chunks into
+`<h>`: `409 {"missing":[...]}` lists chunks to send first, `422` means the chunks
+do not make up content with this hash. Pages are ordered by hash; `limit`
+defaults to 1000, at most 10,000; pass `next` as `after` until it is absent.
+Batches of hashes hold at most 10,000 entries in a body of at most 1 MiB.
+A project the token has no right in answers `404 {"error":"no such project"}`, a
+missing right `403`.
+
+Chunks no object uses are deleted after `upload_sweep_days`, checked every ten
+minutes, so a slow upload never loses its chunks. Data layout:
+
+```text
+v2/chunks/<2 hex>/<2 hex>/<chunk hash>
+v2/meta.db, v2/names.db   (SQLite WAL: users, token hashes, projects, rights, objects, entries, names)
+v2/tmp/, v2/trash/, v2/quarantine/
+```
+
+### Console
+
+Run these with the same `--config` as the server; they work while it runs.
+
+| Command | Effect |
+| --- | --- |
+| `user add <name> [--create-projects]` | Add a user |
+| `user list`, `user rm <name>` | List users; remove one with tokens and rights (uploads stay) |
+| `user create-projects <name> <true\|false>` | Allow or forbid creating projects through the API |
+| `token add <user> [--label text]` | Issue a permanent token; printed once, stored as a hash |
+| `token list [user]`, `token rm <id>` | List tokens (never secrets); revoke one |
+| `project add <name>`, `project list` | Create and list projects |
+| `grant <user> <project> [--read] [--write] [--delete]` | Set the user's rights exactly; rights not given are removed |
+| `revoke <user> <project>`, `grants [user]` | Remove all rights; list rights |
+| `migrate <project> [--type MESH] [ids...]` | Copy v1 objects (all or the given ids) into a v2 project; v1 stays |
+| `verify` | Also re-hashes every v2 chunk and reports chunks in use but missing |
+
 ## Rust SDK
 
-Download `ulduar-v0.1.4-rust-sdk.zip` from the public release, extract its
+Download `ulduar-v2.0.0-rust-sdk.zip` from the public release, extract its
 `ulduar-sdk/` folder into your application's `vendor/`, and add:
 
 ```toml
@@ -191,13 +273,13 @@ ulduar-sdk = { path = "vendor/ulduar-sdk" }
 ```
 
 ```rust,no_run
-use ulduar_sdk::{ImportMode, Remote, Store, StoreOptions, SyncOptions};
+use ulduar_sdk::{AssetType, ImportMode, Meta, Remote, Store, StoreOptions, SyncOptions};
 
 async fn assets() -> Result<(), ulduar_sdk::Error> {
-    let mut options = StoreOptions::local("application-cache/assets");
-    options.remote = Some(Remote::new("https://assets.example.com:7443", "uld_your_key"));
-    let store = Store::open(options).await?;
-    let written = store.import_file("asset.bin", ImportMode::Copy).await?;
+    let remote = Remote::new("https://assets.example.com:7443", "uld2_your_token");
+    let store = Store::open(StoreOptions::remote("application-cache/assets", "game", remote)).await?;
+    let meta = Meta::typed(AssetType::fourcc(b"MESH")).named("props/crate");
+    let written = store.import_file("asset.bin", ImportMode::Copy, meta).await?;
     // Locally committed. No upload until the application asks for synchronization.
     let lease = store.get(written.hash).await?;
     println!("Read this path while holding the lease: {}", lease.path().display());
@@ -213,6 +295,10 @@ and Rust bindings. Cargo builds the small bindings and their public dependencies
 it does not need access to the private implementation. The matching native
 library is embedded into the application and extracted into a per-user cache on
 first use, so deployment does not need a separate DLL beside the executable.
+
+SDK 2 works with storage v2 only: a store names its project, each write carries
+an optional type and name, and `list`, `named`, `name`, `delete`, `projects`,
+`create_project` and `me` query the server. SDK 0.1.x remains usable with v1.
 
 Writes accept owned/shared bytes, copied/moved files, readers and encoder callbacks.
 Reads by hash use local data first and download verified missing objects. Work runs
@@ -233,7 +319,7 @@ source builds. The public SDK uses the local store facade described above.
 
 ## Storage and operations
 
-Paths are relative to the configured `root_dir`:
+v1 paths are relative to the configured `root_dir` (v2 is under `v2/`, above):
 
 ```text
 objects/<first 2 hex>/<next 2 hex>/<id>

@@ -182,6 +182,27 @@ After `install`, the OS runs the process for you. Do not start a second `serve`
 process on the same address and port. You do not need cron, the Windows Startup
 folder, or a scheduled task for automatic startup.
 
+## Storage v2: users, tokens and projects
+
+The Rust SDK 2 uses storage v2, which has its own credentials. Create a user, a
+project and rights, then issue a token for the application (Linux shown; on
+Windows use `C:\Ulduar\ulduar.exe --config C:\Ulduar\ulduar.toml`):
+
+```sh
+U="sudo /usr/local/bin/ulduar --config /etc/ulduar/ulduar.toml"
+$U user add workstation            # add --create-projects to let it create projects
+$U project add game
+$U grant workstation game --read --write   # --delete only where removal is wanted
+$U token add workstation --label build-pc  # printed once
+$U grants
+```
+
+Check it with `curl -H "Authorization: Bearer uld2_..." https://localhost:7443/v2/projects`.
+`grant` sets rights exactly: repeat it with the full set to change them. `token rm`,
+`revoke` and `user rm` take effect for new requests within about a second.
+To bring v1 objects into v2, run `migrate game` (optionally `--type MESH` and
+object ids); v1 is not modified. v1 keys keep working on the v1 API only.
+
 ## Check that the server is reachable
 
 Use the key issued above and a hostname matching the certificate. PowerShell:
@@ -279,7 +300,8 @@ certificates, and stored data; do not rerun first-install config-copy steps.
 
 ## Updates
 
-v0.1.5 and later update themselves at startup from signed public releases; see
+v0.1.5 and later update themselves at startup from signed public releases, including
+the move to 2.0.0 (v1 data and keys are kept; `v2/` is created empty); see
 [README.md](README.md#automatic-updates). To pick up a new release, restart the
 service (`Restart-Service ulduar` or `sudo systemctl restart ulduar`). Set
 `auto_update = false` in `ulduar.toml` to manage upgrades by hand as described

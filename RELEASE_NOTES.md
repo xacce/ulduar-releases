@@ -1,3 +1,8 @@
+# Ulduar v2.1.1
+
+Ulduar Desktop fix: text fields accept paste from the system clipboard, copy buttons reach
+it. No server or SDK change. Notes below come from v2.1.0 and still apply.
+
 # Ulduar v2.1.0
 
 Ulduar Desktop, a portable client for storage v2, and the server API it needs. See

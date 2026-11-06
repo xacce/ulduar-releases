@@ -1,6 +1,6 @@
-# Ulduar v2.1.0 build record, 2026-11-06
+# Ulduar v2.1.1 build record, 2026-11-06
 
-Source commit: `a4cfae1f3dfed3f6f5016350b41a8aeeccc3f898`.
+Source commit: `4f0f5af2897e7fcabe86bd525079f9664405a103`.
 
 Built on Windows x64 with Rust 1.96: Windows x64 MSVC server and static Linux x64 musl server (Zig 0.16 via cargo-zigbuild). Packaged, signed and published from a separate Linux host.
 
@@ -10,7 +10,7 @@ Passed on Windows x64: workspace tests (server library, v1 API, destructive, sel
 
 SHA256SUMS records asset hashes and is signed with the Ulduar release key (SHA256SUMS.sig, Ed25519); servers from v0.1.5 verify it before updating themselves. The executables are not Authenticode-signed.
 
-Rust SDK 2.1.0 (storage v2 only, native ABI 3): SDK zip and .crate in this release, see SDK.md.
+Rust SDK 2.1.1 (storage v2 only, native ABI 3): SDK zip and .crate in this release, see SDK.md.
 
 Object-count and offline-cache scale audits: unchanged since v0.1.4, see SCALE.md.
 

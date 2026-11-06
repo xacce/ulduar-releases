@@ -1,3 +1,31 @@
+# Ulduar v2.1.0
+
+Ulduar Desktop, a portable client for storage v2, and the server API it needs. See
+DESKTOP.md.
+
+## Ulduar Desktop
+
+- One executable, no installer: Windows x64 and Linux x64. No macOS build: linking
+  needs the Apple SDK.
+- Accounts on several servers, projects, drag-and-drop upload, verified download,
+  hashes and file details, rename and delete by rights, search over 100 000 files.
+- Optional password encrypting stored accounts; optional PIN locking the running app.
+- Install Server: Ubuntu 24 over SSH with one button. SSH credentials are never stored.
+- Dark themes only. English and Russian.
+
+## Server
+
+- `GET /v2/projects/{p}/files?q=&after=&limit=` lists named and unnamed objects in
+  pages and searches names and hash prefixes.
+- `GET /v2/projects/{p}/stats` returns distinct objects and bytes.
+- Measured at 100 000 files: first page 42 ms, deep page 45 ms, search miss 31 ms,
+  stats 63 ms.
+
+## Not verified
+
+See BUILD_STATUS.md. Installation has not run on a real Ubuntu machine with systemd,
+and OS drag-and-drop and file dialogs have not been used by hand.
+
 # Ulduar v2.0.0
 
 Storage v2: users, projects, rights, chunk-level deduplication across projects,

@@ -18,6 +18,10 @@ See [INSTALL.md](INSTALL.md) for setup, certificates, firewall access, and
 installation from source. Source code is private; releases contain binaries and
 documentation. No GitHub Actions are used.
 
+For people rather than pipelines, [Ulduar Desktop](desktop/README.md) (`DESKTOP.md` in a
+release) is a portable client: accounts, projects, drag-and-drop upload, download, search,
+and one-button server installation on Ubuntu 24 over SSH.
+
 ## Port and configuration
 
 **The default port is TCP 7443.** The server reads `ulduar.toml` beside its
@@ -224,6 +228,8 @@ not see v1 objects until they are copied with `migrate`. The Rust SDK 2 uses onl
 | `GET /v2/projects/<p>/objects?type=&after=&limit=` | read | `{"objects":[...],"next"}`; type must be nonzero |
 | `GET /v2/projects/<p>/names?name=&after=&limit=` | read | Page of objects carrying the name |
 | `GET /v2/projects/<p>/names/<h>` | read | `{"name"}`; `404` without one |
+| `GET /v2/projects/<p>/files?q=&after=&limit=` | read | `{"files":[{"hash","name","size","types","created"}],"next"}`: named objects by (name, hash), then unnamed by hash; see below |
+| `GET /v2/projects/<p>/stats` | read | `{"objects","bytes"}`: distinct objects of the project and their total size |
 
 `PUT .../objects/<h>` without `chunks` links content the server already has:
 `201` if the project gains the entry, `200` if it already had it, `409
@@ -235,6 +241,16 @@ defaults to 1000, at most 10,000; pass `next` as `after` until it is absent.
 Batches of hashes hold at most 10,000 entries in a body of at most 1 MiB.
 A project the token has no right in answers `404 {"error":"no such project"}`, a
 missing right `403`.
+
+`GET .../files` is the catalogue. `q` is whitespace-separated terms, each a
+case-insensitive Unicode substring of the name, all of which must match; a `q` of 4
+to 64 hex characters also matches hashes with that prefix, which is the only way to
+find unnamed objects by search. `limit` defaults to 1000 and is clamped to 1-5000;
+`name` is `null` for unnamed objects and `types` lists the nonzero types. A search
+scans for at most about 2 seconds per request, so a page may be short or even empty
+while `next` is set: keep passing `next` as `after` until it is absent. Cursors are
+opaque. Names whose object is gone are skipped. Renaming is `PUT .../objects/<h>`
+with the object's existing type and the new `name`.
 
 Chunks no object uses are deleted after `upload_sweep_days`, checked every ten
 minutes, so a slow upload never loses its chunks. Data layout:

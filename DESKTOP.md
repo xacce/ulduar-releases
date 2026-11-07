@@ -5,7 +5,9 @@ it, run it.
 
 - `ulduar-desktop-v<version>-windows-x86_64.exe`: Windows 10 or newer, x64.
 - `ulduar-desktop-v<version>-linux-x86_64.tar.gz`: x64 with glibc 2.28 or newer, plus X11
-  or Wayland and OpenGL.
+  or Wayland.
+
+The interface is drawn on the CPU: no video driver, GPU or OpenGL is needed.
 
 The executables are not Authenticode-signed, so Windows SmartScreen may warn on first
 start. Compare the SHA256 with the release's `SHA256SUMS`.

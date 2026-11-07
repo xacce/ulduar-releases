@@ -1,3 +1,10 @@
+# Ulduar v2.1.2
+
+Ulduar Desktop draws its interface on the CPU: no GPU, OpenGL or graphics driver needed.
+Working set on Windows drops from 77 MB to 23 MB empty, from 88 MB to 34 MB with 100 000
+rows. No server or SDK change. On a 4K window a full repaint takes about 37 ms. The Linux
+window has not been run yet: if it fails to open, use v2.1.1 and report it.
+
 # Ulduar v2.1.1
 
 Ulduar Desktop fix: text fields accept paste from the system clipboard, copy buttons reach

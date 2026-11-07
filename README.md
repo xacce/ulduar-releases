@@ -121,6 +121,11 @@ running the server needs write access to the executable's folder (the default
 LocalSystem/root service accounts have it). On Windows the replaced file stays as
 `ulduar.exe.<pid>.old` until the next start removes it.
 
+The check runs inside the server process, under the service's own user and sandbox, not
+under whoever ran the restart. A non-root `User=` without write access to the folder, or
+`ProtectSystem=` / `ReadWritePaths=` excluding it, makes it log `update check skipped` on
+every start; update by hand as described in INSTALL.md.
+
 ```toml
 auto_update = false   # disable the check
 # update_url = "https://github.com/xacce/ulduar-releases/releases/latest/download"

@@ -1,4 +1,4 @@
-# Ulduar binary Rust SDK 2.1.1
+# Ulduar binary Rust SDK 2.1.2
 
 Ulduar is an immutable asset store addressed by the 64-character lowercase BLAKE3
 hash of each object's bytes. This SDK adds a durable local store to the remote
@@ -14,8 +14,8 @@ directories and different credentials (v1 keys, v2 user tokens).
 
 ## Install and deploy
 
-Download `ulduar-v2.1.1-rust-sdk.zip` from the
-[public release](https://github.com/xacce/ulduar-releases/releases/tag/v2.1.1),
+Download `ulduar-v2.1.2-rust-sdk.zip` from the
+[public release](https://github.com/xacce/ulduar-releases/releases/tag/v2.1.2),
 verify its SHA256 against the release's `SHA256SUMS`, and extract `ulduar-sdk`
 into your application's `vendor` directory:
 
@@ -24,7 +24,7 @@ into your application's `vendor` directory:
 ulduar-sdk = { path = "vendor/ulduar-sdk" }
 ```
 
-`ulduar-sdk-2.1.1.crate` contains the same bindings and native libraries in Cargo's
+`ulduar-sdk-2.1.2.crate` contains the same bindings and native libraries in Cargo's
 archive format; unpack it and use a path dependency. It is not published on
 crates.io. Do not point Cargo at the private implementation repository.
 
